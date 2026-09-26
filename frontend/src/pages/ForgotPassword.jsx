@@ -1,9 +1,20 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { api } from '../lib/api';
 
 const EyeIcon = ({ show }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-slate-500 hover:text-slate-700">
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="20"
+    height="20"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className="text-slate-500 hover:text-slate-700"
+  >
     {show ? (
       <>
         <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
@@ -71,14 +82,22 @@ export function ForgotPassword() {
       <div className="bg-white p-8 rounded-xl shadow-sm border border-slate-100 max-w-sm w-full">
         <h1 className="text-2xl font-bold text-slate-800 mb-6 text-center">Reset Password</h1>
         {message && <div className="mb-4 text-emerald-600 text-sm text-center">{message}</div>}
-        
+
         {step === 1 && (
           <form onSubmit={handleForgot} className="space-y-4">
             <div>
               <label className="block text-sm font-medium mb-1">Email</label>
-              <input type="email" className="w-full border rounded-lg px-3 py-2" value={email} onChange={e => setEmail(e.target.value)} required />
+              <input
+                type="email"
+                className="w-full border rounded-lg px-3 py-2"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+              />
             </div>
-            <button type="submit" className="w-full bg-blue-600 text-white rounded-lg py-2">Send OTP</button>
+            <button type="submit" className="w-full bg-blue-600 text-white rounded-lg py-2">
+              Send OTP
+            </button>
           </form>
         )}
 
@@ -86,9 +105,17 @@ export function ForgotPassword() {
           <form onSubmit={handleVerify} className="space-y-4">
             <div>
               <label className="block text-sm font-medium mb-1">Enter OTP</label>
-              <input type="text" className="w-full border rounded-lg px-3 py-2" value={otp} onChange={e => setOtp(e.target.value)} required />
+              <input
+                type="text"
+                className="w-full border rounded-lg px-3 py-2"
+                value={otp}
+                onChange={(e) => setOtp(e.target.value)}
+                required
+              />
             </div>
-            <button type="submit" className="w-full bg-blue-600 text-white rounded-lg py-2">Verify</button>
+            <button type="submit" className="w-full bg-blue-600 text-white rounded-lg py-2">
+              Verify
+            </button>
           </form>
         )}
 
@@ -97,31 +124,36 @@ export function ForgotPassword() {
             <div>
               <label className="block text-sm font-medium mb-1">New Password</label>
               <div className="relative">
-                <input 
-                  type={showPassword ? "text" : "password"} 
-                  className="w-full border rounded-lg px-3 py-2 pr-10" 
-                  value={newPassword} 
-                  onChange={e => setNewPassword(e.target.value)} 
-                  required 
-                  minLength={8} 
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  className="w-full border rounded-lg px-3 py-2 pr-10"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  required
+                  minLength={8}
                 />
-                <button 
+                <button
                   type="button"
                   className="absolute inset-y-0 right-0 flex items-center pr-3"
                   onClick={() => setShowPassword(!showPassword)}
                   tabIndex="-1"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
                 >
                   <EyeIcon show={showPassword} />
                 </button>
               </div>
             </div>
-            <button type="submit" className="w-full bg-blue-600 text-white rounded-lg py-2">Reset Password</button>
+            <button type="submit" className="w-full bg-blue-600 text-white rounded-lg py-2">
+              Reset Password
+            </button>
           </form>
         )}
-        
+
         {error && <div className="mt-4 text-red-600 text-sm text-center">{error}</div>}
         <div className="mt-4 text-sm text-center">
-          <Link to="/login" className="text-blue-600 hover:underline">Back to sign in</Link>
+          <Link to="/login" className="text-blue-600 hover:underline">
+            Back to sign in
+          </Link>
         </div>
       </div>
     </div>

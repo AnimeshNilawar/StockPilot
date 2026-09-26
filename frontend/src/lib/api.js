@@ -1,4 +1,9 @@
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000/api/v1';
+// Relative by default: the Vite dev server proxies `/api` to the backend, so the
+// SPA talks to its own origin and CORS never enters the picture. This also keeps
+// the app working when it is opened via 127.0.0.1, a LAN address, or a tunnel.
+// Set VITE_API_BASE_URL to an absolute URL to bypass the proxy (the Docker
+// frontend does exactly that).
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
 
 class APIError extends Error {
   constructor(message, status, data) {
@@ -45,10 +50,18 @@ async function request(endpoint, options = {}, isRetry = false) {
     data = null;
   }
 
-  if (response.status === 401 && !isRetry && endpoint !== '/auth/refresh' && endpoint !== '/auth/login') {
+  if (
+    response.status === 401 &&
+    !isRetry &&
+    endpoint !== '/auth/refresh' &&
+    endpoint !== '/auth/login'
+  ) {
     // Attempt refresh
     try {
-      const refreshRes = await fetch(`${BASE_URL}/auth/refresh`, { method: 'POST', credentials: 'include' });
+      const refreshRes = await fetch(`${BASE_URL}/auth/refresh`, {
+        method: 'POST',
+        credentials: 'include',
+      });
       const refreshData = await refreshRes.json();
       if (refreshRes.ok && refreshData.success) {
         setAccessToken(refreshData.data.accessToken);
