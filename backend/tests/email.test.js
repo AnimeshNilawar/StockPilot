@@ -29,7 +29,10 @@ describe('Email Service & Providers', () => {
       });
 
       expect(result).toBe(true);
-      expect(consoleSpy).toHaveBeenCalledWith('[DEV ONLY] OTP for test@example.com: 123456');
+      // The dev-only log states the expiry, matching what a caller was told.
+      expect(consoleSpy).toHaveBeenCalledWith(
+        '[DEV ONLY] OTP for test@example.com: 123456 (expires in 10 minutes)',
+      );
       consoleSpy.mockRestore();
     });
   });

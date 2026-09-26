@@ -32,7 +32,7 @@ router
   .patch(
     requirePermission('receipt.edit'),
     validate({ params: receiptValidator.idParam, body: receiptValidator.transition }),
-    receiptController.transition,
+    receiptController.changeState,
   );
 
 router

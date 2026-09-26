@@ -4,4 +4,6 @@ async function main() {
   await prisma.$executeRawUnsafe(`UPDATE receipts SET supplier = NULL`);
   console.log('Supplier column nullified');
 }
-main().catch(console.error).finally(() => prisma.$disconnect());
+main()
+  .catch(console.error)
+  .finally(() => prisma.$disconnect());

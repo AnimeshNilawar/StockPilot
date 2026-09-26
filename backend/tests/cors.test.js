@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const request = require('supertest');
 const app = require('../src/app');
 
@@ -76,5 +78,28 @@ describe('CORS', () => {
   it('still serves non-browser callers that send no Origin', async () => {
     const res = await request(app).get('/api/v1/health');
     expect(res.status).toBe(200);
+  });
+
+  it('exposes every replay header the controllers actually emit', () => {
+    // The exposed list and the controllers drifted apart once: receipts and
+    // deliveries emitted `Idempotent-Replayed` while only `Idempotent-Replay` was
+    // exposed, so a browser was blocked from reading the very header that tells
+    // the SPA a request was a replay. Asserting the config on its own cannot catch
+    // that, because the config is self-consistent either way.
+    const { exposedHeaders } = require('../src/config/cors').corsOptions;
+    const dir = path.join(__dirname, '..', 'src', 'controllers');
+    const emitted = new Set();
+
+    for (const file of fs.readdirSync(dir)) {
+      const source = fs.readFileSync(path.join(dir, file), 'utf8');
+      for (const [, name] of source.matchAll(/res\.set\('(Idempotent-[^']+)'/g)) {
+        emitted.add(name);
+      }
+    }
+
+    expect(emitted.size).toBeGreaterThan(0);
+    for (const name of emitted) {
+      expect(exposedHeaders).toContain(name);
+    }
   });
 });

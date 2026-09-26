@@ -13,7 +13,7 @@ async function main() {
 
   const warehouses = await prisma.warehouse.findMany({ select: { name: true } });
   console.log(`Warehouses:\n  ${warehouses.length}`);
-  warehouses.forEach(w => console.log(`  - ${w.name}`));
+  warehouses.forEach((w) => console.log(`  - ${w.name}`));
   console.log();
 
   const locationsCount = await prisma.location.count();
@@ -44,7 +44,7 @@ async function main() {
   const stockQuants = await prisma.stockQuant.findMany({
     include: { product: true, location: true },
     where: { onHand: { gt: 0 } },
-    orderBy: { product: { name: 'asc' } }
+    orderBy: { product: { name: 'asc' } },
   });
 
   console.log('Current Stock:');

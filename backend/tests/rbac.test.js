@@ -9,6 +9,7 @@ describe('RBAC & Warehouse Access API', () => {
   let adminToken;
   let staffToken;
   let warehouse;
+  let staffUserId;
 
   beforeAll(async () => {
     const admin = await prisma.user.findUnique({
@@ -43,6 +44,7 @@ describe('RBAC & Warehouse Access API', () => {
     });
 
     staffToken = authService.generateAccessToken(staffUser);
+    staffUserId = staffUser.id;
   });
 
   describe('GET /api/v1/users', () => {
@@ -63,7 +65,11 @@ describe('RBAC & Warehouse Access API', () => {
   });
 
   afterAll(async () => {
-    await prisma.user.deleteMany({ where: { email: 'staff@stockpilot.local' } });
+    // Remove the user this suite created, by id. Deleting by the seeded demo
+    // email instead would remove an account the suite never created, quietly
+    // breaking the demo data for whoever seeds the database next. The user goes
+    // first because it holds the warehouse access row.
+    await prisma.user.delete({ where: { id: staffUserId } });
     await prisma.warehouse.delete({ where: { id: warehouse.id } });
     await prisma.$disconnect();
   });

@@ -586,7 +586,7 @@ describe('concurrency', () => {
   }, 30000);
 
   it('never loses an update under parallel opposing internal moves', async () => {
-    // Both sides need stock so opposing moves don't randomly fail on negative-stock 
+    // Both sides need stock so opposing moves don't randomly fail on negative-stock
     // checks due to execution interleaving.
     await receiveInto(race.id, loc.production, 20);
 

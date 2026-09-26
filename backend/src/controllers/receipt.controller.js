@@ -1,17 +1,20 @@
 const { prisma } = require('../lib/prisma');
-const { badRequest, notFound, conflict } = require('../utils/appError');
+const { badRequest, notFound } = require('../utils/appError');
+const { parsePagination, paginated } = require('../utils/query');
 const idempotencyService = require('../services/idempotency.service');
 const inventoryService = require('../services/inventory.service');
 const referenceService = require('../services/reference.service');
 const auditService = require('../services/audit.service');
+const documentService = require('../services/document.service');
 const { DOCUMENT_TYPES, REFERENCE_PREFIX } = require('../domain/documentType');
 const { LOCATION_TYPES, isBoundary } = require('../domain/location');
-const { DOC_STATES, canTransition } = require('../domain/documentState');
-const { assertWarehouseAccess } = require('../middleware/access.middleware');
+const { DOC_STATES } = require('../domain/documentState');
+const { isSupplier } = require('../domain/partner');
+const { assertWarehouseAccess, applyWarehouseScope } = require('../middleware/access.middleware');
 
 const list = async (req, res) => {
-  const { page = 1, pageSize = 20, warehouseId, state, search } = req.query;
-  const skip = (page - 1) * pageSize;
+  const { page, pageSize, skip, take } = parsePagination(req.valid.query);
+  const { warehouseId, state, search } = req.valid.query;
 
   const where = {};
   if (state) where.state = state;
@@ -19,13 +22,10 @@ const list = async (req, res) => {
     assertWarehouseAccess(req.user, warehouseId);
     where.warehouseId = warehouseId;
   } else {
-    const user = await prisma.user.findUnique({
-      where: { id: req.user.id },
-      include: { warehouseAccess: true, role: true },
-    });
-    if (user.role.name !== 'ADMIN') {
-      where.warehouseId = { in: user.warehouseAccess.map((a) => a.warehouseId) };
-    }
+    // Only warehouse-scoped roles are pinned to their assignments, so an
+    // INVENTORY_MANAGER still sees every warehouse. Naming a warehouse is
+    // checked above, so a crafted id cannot widen the result.
+    Object.assign(where, applyWarehouseScope(req.user));
   }
 
   if (search) {
@@ -49,28 +49,20 @@ const list = async (req, res) => {
           },
         },
       },
-      skip: Number(skip),
-      take: Number(pageSize),
+      skip,
+      take,
       orderBy: { createdAt: 'desc' },
     }),
   ]);
 
   res.status(200).json({
     status: 'success',
-    data: {
-      items: receipts,
-      pagination: {
-        page: Number(page),
-        pageSize: Number(pageSize),
-        total,
-        totalPages: Math.ceil(total / pageSize),
-      },
-    },
+    data: paginated(receipts, total, { page, pageSize }),
   });
 };
 
 const getById = async (req, res) => {
-  const { id } = req.params;
+  const { id } = req.valid.params;
 
   const receipt = await prisma.receipt.findUnique({
     where: { id },
@@ -103,19 +95,36 @@ const validateLocations = async (warehouseId, lines) => {
       throw badRequest(`Location ${loc.name} does not belong to warehouse ${warehouseId}`);
     }
     if (isBoundary(loc.type)) {
-      throw badRequest(`Location ${loc.name} is a boundary location and cannot be a receipt destination`);
+      throw badRequest(
+        `Location ${loc.name} is a boundary location and cannot be a receipt destination`,
+      );
     }
   }
 };
 
+/**
+ * A receipt is goods arriving, so its partner must be allowed to supply. A
+ * customer-only partner is rejected here rather than at validation, where the
+ * stock movement would otherwise be attempted and rolled back.
+ */
+const assertPartnerCanSupply = async (partnerId) => {
+  const partner = await prisma.partner.findUnique({ where: { id: partnerId } });
+  if (!partner) throw badRequest('Partner not found');
+  if (!isSupplier(partner.type)) {
+    throw badRequest(
+      `Partner ${partner.name} is a customer and cannot receive goods`,
+      'INVALID_PARTNER_TYPE',
+    );
+  }
+  return partner;
+};
+
 const create = async (req, res) => {
-  const { partnerId, warehouseId, lines } = req.body;
+  const { partnerId, warehouseId, lines } = req.valid.body;
 
   assertWarehouseAccess(req.user, warehouseId);
   await validateLocations(warehouseId, lines);
-
-  const partner = await prisma.partner.findUnique({ where: { id: partnerId } });
-  if (!partner) throw badRequest('Partner not found');
+  await assertPartnerCanSupply(partnerId);
 
   const receipt = await prisma.$transaction(async (tx) => {
     const reference = await referenceService.nextReference(tx, REFERENCE_PREFIX.RECEIPT);
@@ -157,8 +166,8 @@ const create = async (req, res) => {
 };
 
 const update = async (req, res) => {
-  const { id } = req.params;
-  const { partnerId, warehouseId, lines } = req.body;
+  const { id } = req.valid.params;
+  const { partnerId, warehouseId, lines } = req.valid.body;
 
   const current = await prisma.receipt.findUnique({ where: { id }, include: { lines: true } });
   if (!current) throw notFound('Receipt not found');
@@ -174,6 +183,7 @@ const update = async (req, res) => {
   }
   const finalWarehouseId = warehouseId || current.warehouseId;
   await validateLocations(finalWarehouseId, lines);
+  await assertPartnerCanSupply(partnerId);
 
   const updated = await prisma.$transaction(async (tx) => {
     // Delete existing lines
@@ -208,22 +218,24 @@ const update = async (req, res) => {
   res.status(200).json({ status: 'success', data: updated });
 };
 
-const transition = async (req, res) => {
-  const { id } = req.params;
-  const { state: newState } = req.body;
+const changeState = async (req, res) => {
+  const { id } = req.valid.params;
+  const { state: newState } = req.valid.body;
 
   const current = await prisma.receipt.findUnique({ where: { id } });
   if (!current) throw notFound('Receipt not found');
   assertWarehouseAccess(req.user, current.warehouseId);
 
-  if (!canTransition(current.state, newState)) {
-    throw conflict(`Cannot transition receipt from ${current.state} to ${newState}`);
-  }
-
-  const updated = await prisma.receipt.update({
-    where: { id },
-    data: { state: newState },
-  });
+  // The state read above is only used for the access check and the audit trail;
+  // the write itself is a compare-and-set inside documentService, so a request
+  // that raced another one is rejected instead of clobbering it.
+  const updated = await prisma.$transaction((tx) =>
+    documentService.transition(tx, {
+      document: tx.receipt,
+      documentId: id,
+      to: newState,
+    }),
+  );
 
   await auditService.log({
     userId: req.user.id,
@@ -237,20 +249,19 @@ const transition = async (req, res) => {
 };
 
 const cancel = async (req, res) => {
-  const { id } = req.params;
+  const { id } = req.valid.params;
 
   const current = await prisma.receipt.findUnique({ where: { id } });
   if (!current) throw notFound('Receipt not found');
   assertWarehouseAccess(req.user, current.warehouseId);
 
-  if (!canTransition(current.state, DOC_STATES.CANCELLED)) {
-    throw conflict(`Cannot cancel receipt in state ${current.state}`);
-  }
-
-  const updated = await prisma.receipt.update({
-    where: { id },
-    data: { state: DOC_STATES.CANCELLED },
-  });
+  const updated = await prisma.$transaction((tx) =>
+    documentService.transition(tx, {
+      document: tx.receipt,
+      documentId: id,
+      to: DOC_STATES.CANCELLED,
+    }),
+  );
 
   await auditService.log({
     userId: req.user.id,
@@ -263,7 +274,7 @@ const cancel = async (req, res) => {
 };
 
 const validate = async (req, res) => {
-  const { id } = req.params;
+  const { id } = req.valid.params;
 
   const receipt = await prisma.receipt.findUnique({
     where: { id },
@@ -279,18 +290,16 @@ const validate = async (req, res) => {
     userId: req.user.id,
     payload: req.body,
     handler: async (tx) => {
-      // Re-read inside tx
+      // Re-read inside the transaction: the state that authorises the stock
+      // movement must be the one that commits with it.
       const current = await tx.receipt.findUnique({
         where: { id },
         include: { lines: true },
       });
-      if (current.state === DOC_STATES.DONE || current.state === DOC_STATES.CANCELLED) {
-        throw conflict('Receipt is already DONE or CANCELLED');
-      }
 
       // Find VENDOR location for this warehouse
       const vendorLoc = await tx.location.findFirst({
-        where: { warehouseId: receipt.warehouseId, type: LOCATION_TYPES.VENDOR },
+        where: { warehouseId: current.warehouseId, type: LOCATION_TYPES.VENDOR },
       });
       if (!vendorLoc) {
         throw badRequest('No VENDOR location found for this warehouse');
@@ -309,9 +318,12 @@ const validate = async (req, res) => {
         });
       }
 
-      const updated = await tx.receipt.update({
-        where: { id },
-        data: { state: DOC_STATES.DONE },
+      // Stock is posted, so the state flip is a compare-and-set: a concurrent
+      // validation of the same receipt loses the race and its whole
+      // transaction, movements included, is rolled back.
+      const updated = await documentService.finalize(tx, {
+        document: tx.receipt,
+        documentId: id,
       });
 
       return { statusCode: 200, body: { status: 'success', data: updated } };
@@ -319,7 +331,7 @@ const validate = async (req, res) => {
   });
 
   if (result.replayed) {
-    res.set('Idempotent-Replayed', 'true');
+    res.set('Idempotent-Replay', 'true');
   } else if (result.statusCode === 200) {
     await auditService.log({
       userId: req.user.id,
@@ -328,7 +340,7 @@ const validate = async (req, res) => {
       entityId: id,
     });
   }
-  
+
   res.status(result.statusCode).json(result.body);
 };
 
@@ -337,7 +349,7 @@ module.exports = {
   getById,
   create,
   update,
-  transition,
+  changeState,
   cancel,
   validate,
 };

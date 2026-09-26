@@ -11,12 +11,21 @@ describe('Phase 2 — Catalog API (categories, UOM, products)', () => {
     manager = await createUserWithToken('INVENTORY_MANAGER');
     staff = await createUserWithToken('WAREHOUSE_STAFF');
 
-    const uom = await prisma.uom.findUnique({ where: { code: 'KG' } });
+    // Created here rather than looked up in the seed: the suite must not depend
+    // on master data that a particular database happens to contain, or it passes
+    // on one machine and fails on a freshly migrated one.
+    const uom = await prisma.uom.create({
+      data: { code: unique('UOM').toUpperCase().replace(/-/g, '').slice(0, 10), name: 'Test UOM' },
+    });
     uomId = uom.id;
   });
 
   afterAll(async () => {
     await prisma.user.deleteMany({ where: { id: { in: [manager.user.id, staff.user.id] } } });
+    // Products created through the API hold a reference to this UOM, so they
+    // have to go first or the delete is refused.
+    await prisma.product.deleteMany({ where: { uomId } });
+    await prisma.uom.deleteMany({ where: { id: uomId } });
     await prisma.$disconnect();
   });
 
@@ -55,10 +64,29 @@ describe('Phase 2 — Catalog API (categories, UOM, products)', () => {
     });
 
     it('refuses to delete a UOM that products reference', async () => {
+      // The referencing product is created here, so the assertion does not
+      // depend on a product that some other test (or the seed) happens to have
+      // left pointing at this UOM. Written directly rather than via
+      // `createProduct`, which always derives the UOM from a code.
+      const category = await prisma.category.create({ data: { name: unique('Category') } });
+      const product = await prisma.product.create({
+        data: {
+          sku: unique('SKU').toUpperCase().replace(/-/g, ''),
+          name: 'UOM holder',
+          uomId,
+          categoryId: category.id,
+          costPrice: '1.00',
+          reorderMin: '0',
+          reorderMax: '10',
+        },
+      });
+
       const res = await request(app).delete(`/api/v1/uoms/${uomId}`).set(auth(manager.token));
 
       expect(res.status).toBe(400);
       expect(res.body.code).toBe('UOM_IN_USE');
+      expect((await prisma.uom.findUnique({ where: { id: uomId } })).id).toBe(uomId);
+      expect((await prisma.product.findUnique({ where: { id: product.id } })).id).toBe(product.id);
     });
 
     it('blocks WAREHOUSE_STAFF from writing master data', async () => {

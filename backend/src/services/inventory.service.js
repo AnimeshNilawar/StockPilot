@@ -1,7 +1,12 @@
 const { Prisma } = require('@prisma/client');
 const { prisma } = require('../lib/prisma');
 const { conflict, unprocessable, badRequest } = require('../utils/appError');
-const { isStockHolding, isBoundary } = require('../domain/location');
+const {
+  isStockHolding,
+  isOrdinaryHolding,
+  isBoundary,
+  LOCATION_TYPES,
+} = require('../domain/location');
 const { DOCUMENT_TYPES } = require('../domain/documentType');
 const { DOC_STATES } = require('../domain/documentState');
 
@@ -289,14 +294,21 @@ const assertMoveAllowed = ({ fromLocation, toLocation, documentType }) => {
       }
       break;
     case DOCUMENT_TYPES.ADJUSTMENT:
-      // Negative adjustments flow INTERNAL -> SCRAP, positive ones the reverse.
-      if (!isStockHolding(fromLocation.type) && !isStockHolding(toLocation.type)) {
-        throw unprocessable(
-          'An adjustment must touch a stock-holding location',
-          'INVALID_LOCATION_TYPES',
-        );
-      }
-      break;
+      // An adjustment is a stock correction, so it runs between ordinary stock
+      // and the scrap bin in one direction or the other: write-off is
+      // holding -> SCRAP, write-back is SCRAP -> holding. Anything else is a
+      // transfer or a mislabelled document, and posting it as an adjustment
+      // would let a quantity discrepancy masquerade as a correction. The
+      // ordinary side is deliberately isOrdinaryHolding, not isStockHolding:
+      // SCRAP holds stock too, and SCRAP -> SCRAP is a transfer, not a
+      // correction.
+      if (fromLocation.type === LOCATION_TYPES.SCRAP && isOrdinaryHolding(toLocation.type)) break;
+      if (toLocation.type === LOCATION_TYPES.SCRAP && isOrdinaryHolding(fromLocation.type)) break;
+      throw unprocessable(
+        'An adjustment must move between an ordinary stock-holding location and SCRAP ' +
+          '(write-off: stock -> scrap, write-back: scrap -> stock)',
+        'INVALID_LOCATION_TYPES',
+      );
     default:
       throw badRequest(`Unknown document type: ${documentType}`, 'INVALID_DOCUMENT_TYPE');
   }
@@ -305,6 +317,58 @@ const assertMoveAllowed = ({ fromLocation, toLocation, documentType }) => {
 // ---------------------------------------------------------------------------
 // The move executor
 // ---------------------------------------------------------------------------
+
+/**
+ * Decides whether stock may leave a location, and what the reservation column
+ * should read afterwards. Two modes, because a move out of a location can be
+ * making two different claims on the same balance:
+ *
+ *   consumeOwnReservation — the caller picked this document, so these units are
+ *     already spoken for and `freeToUse` deliberately excludes them. Checking
+ *     free-to-use here would make a fully reserved delivery unpickable-to-ship,
+ *     so availability is the raw `onHand` instead, and the reservation is
+ *     released in the same write. The claim must still be present: without it
+ *     the document would be consuming stock it never reserved, and two
+ *     deliveries could then race for the same units.
+ *
+ *   otherwise — the stock is unclaimed, so availability is free-to-use, and any
+ *     reservation the caller passes in is released alongside the movement.
+ *
+ * @returns the reservation quantity to store after the move.
+ */
+const planDebit = ({
+  quant,
+  quantity,
+  productSku,
+  locationCode,
+  consumeOwnReservation,
+  releaseReservation,
+}) => {
+  if (consumeOwnReservation) {
+    if (quant.reservedQuantity.lt(quantity)) {
+      throw conflict(
+        `Reserved stock for product ${productSku} at ${locationCode} is ` +
+          `${quant.reservedQuantity.toString()} but the delivery needs ${quantity.toString()}; ` +
+          're-pick the delivery',
+        'RESERVATION_MISSING',
+      );
+    }
+    return quant.reservedQuantity.minus(quantity);
+  }
+
+  const available = freeToUse(quant);
+  if (available.lt(quantity)) {
+    throw unprocessable(
+      `Insufficient stock for product ${productSku} at ${locationCode}: ` +
+        `requested ${quantity.toString()}, available ${available.toString()}`,
+      'INSUFFICIENT_STOCK',
+    );
+  }
+
+  return releaseReservation === null
+    ? quant.reservedQuantity
+    : maxZero(quant.reservedQuantity.minus(dec(releaseReservation)));
+};
 
 /**
  * Applies one completed movement.
@@ -320,6 +384,10 @@ const assertMoveAllowed = ({ fromLocation, toLocation, documentType }) => {
  * @param params.moveId           pre-created move row to mark done (optional).
  * @param params.releaseReservation quantity of the caller's reservation to
  *        consume alongside the physical movement (delivery validation).
+ * @param params.consumeOwnReservation when true the caller holds a reservation
+ *        for exactly this quantity from this document's pick step, so the
+ *        availability check runs against `onHand` instead of free-to-use and
+ *        the reservation is released in the same write.
  * @returns {{ move, before, after }}
  *
  * When the source is a boundary location no quant row is created or decremented:
@@ -338,6 +406,7 @@ const executeMove = async (tx, params) => {
     createdById = null,
     moveId = null,
     releaseReservation: reservationToRelease = null,
+    consumeOwnReservation = false,
   } = params;
 
   const qty = dec(quantity);
@@ -380,19 +449,19 @@ const executeMove = async (tx, params) => {
   const fromQuant = byLocation.get(fromLocationId);
   const toQuant = byLocation.get(toLocationId);
 
-  if (fromIsStock) {
-    const available = freeToUse(fromQuant);
-    if (available.lt(qty)) {
-      throw unprocessable(
-        `Insufficient stock for product ${product.sku} at ${fromLocation.shortCode}: requested ${qty.toString()}, available ${available.toString()}`,
-        'INSUFFICIENT_STOCK',
-      );
-    }
+  // A move out of a stock-holding location may also change the reservation, so
+  // the resulting value is tracked for the returned snapshot below.
+  let reservedAfter = fromIsStock ? fromQuant.reservedQuantity : null;
 
-    const reservedAfter =
-      reservationToRelease === null
-        ? fromQuant.reservedQuantity
-        : maxZero(fromQuant.reservedQuantity.minus(dec(reservationToRelease)));
+  if (fromIsStock) {
+    reservedAfter = planDebit({
+      quant: fromQuant,
+      quantity: qty,
+      productSku: product.sku,
+      locationCode: fromLocation.shortCode,
+      consumeOwnReservation,
+      releaseReservation: reservationToRelease,
+    });
 
     await tx.stockQuant.update({
       where: { productId_locationId: { productId, locationId: fromLocationId } },
@@ -436,16 +505,23 @@ const executeMove = async (tx, params) => {
     move,
     before: { from: fromQuant || null, to: toQuant || null },
     after: {
-      from: fromQuant ? { onHand: fromQuant.onHand.minus(qty) } : null,
+      from: fromQuant
+        ? { onHand: fromQuant.onHand.minus(qty), reservedQuantity: reservedAfter }
+        : null,
       to: { onHand: (toQuant ? toQuant.onHand : ZERO).plus(qty) },
     },
   };
 };
 
 /**
- * Consumes a reservation *and* the physical stock in one transaction — the
- * delivery-validation path. Availability is checked against free-to-use so a
- * reservation can never be over-consumed.
+ * Consumes a reservation *and* the physical stock in one transaction, checking
+ * availability against free-to-use.
+ *
+ * Note this is *not* how a picked delivery ships: that path goes through
+ * `executeMove` with `consumeOwnReservation`, because the units are already
+ * reserved and so are excluded from free-to-use. This primitive is the
+ * unreserved equivalent — a direct "consume against what's free" operation, kept
+ * as part of the engine's public surface for tooling and tests.
  */
 const consumeReservation = async (tx, { productId, locationId, quantity }) => {
   const qty = dec(quantity);

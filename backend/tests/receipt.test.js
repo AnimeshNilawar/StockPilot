@@ -1,6 +1,13 @@
 const request = require('supertest');
 const app = require('../src/app');
-const { prisma, createUserWithToken, createWarehouseWithLocations, createProduct, createPartner, unique } = require('./helpers');
+const {
+  prisma,
+  createUserWithToken,
+  createWarehouseWithLocations,
+  createProduct,
+  createPartner,
+  unique,
+} = require('./helpers');
 const { DOC_STATES } = require('../src/domain/documentState');
 
 describe('receipts', () => {
@@ -21,15 +28,21 @@ describe('receipts', () => {
     const wh1 = await createWarehouseWithLocations();
     warehouse = wh1.warehouse;
     loc = wh1.locations;
-    await prisma.userWarehouseAccess.create({ data: { userId: staff.user.id, warehouseId: warehouse.id } });
+    await prisma.userWarehouseAccess.create({
+      data: { userId: staff.user.id, warehouseId: warehouse.id },
+    });
 
     const wh2 = await createWarehouseWithLocations();
     otherWarehouse = wh2.warehouse;
     otherLoc = wh2.locations;
-    await prisma.userWarehouseAccess.create({ data: { userId: otherStaff.user.id, warehouseId: otherWarehouse.id } });
-    
+    await prisma.userWarehouseAccess.create({
+      data: { userId: otherStaff.user.id, warehouseId: otherWarehouse.id },
+    });
+
     // Give manager access to warehouse
-    await prisma.userWarehouseAccess.create({ data: { userId: manager.user.id, warehouseId: warehouse.id } });
+    await prisma.userWarehouseAccess.create({
+      data: { userId: manager.user.id, warehouseId: warehouse.id },
+    });
   });
 
   afterAll(async () => {
@@ -52,7 +65,10 @@ describe('receipts', () => {
 
   describe('creation', () => {
     it('creates a draft receipt', async () => {
-      const res = await request(app).post('/api/v1/receipts').set(auth(staff.token)).send(reqBody());
+      const res = await request(app)
+        .post('/api/v1/receipts')
+        .set(auth(staff.token))
+        .send(reqBody());
       expect(res.status).toBe(201);
       expect(res.body.data.state).toBe(DOC_STATES.DRAFT);
       expect(res.body.data.reference).toMatch(/^RCP-/);
@@ -71,9 +87,13 @@ describe('receipts', () => {
       const res = await request(app)
         .post('/api/v1/receipts')
         .set(auth(staff.token))
-        .send(reqBody({
-          lines: [{ productId: product.id, quantity: '10', destinationLocationId: otherLoc.store.id }]
-        }));
+        .send(
+          reqBody({
+            lines: [
+              { productId: product.id, quantity: '10', destinationLocationId: otherLoc.store.id },
+            ],
+          }),
+        );
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/does not belong to warehouse/);
     });
@@ -82,9 +102,13 @@ describe('receipts', () => {
       const res = await request(app)
         .post('/api/v1/receipts')
         .set(auth(staff.token))
-        .send(reqBody({
-          lines: [{ productId: product.id, quantity: '10', destinationLocationId: loc.vendor.id }]
-        }));
+        .send(
+          reqBody({
+            lines: [
+              { productId: product.id, quantity: '10', destinationLocationId: loc.vendor.id },
+            ],
+          }),
+        );
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/boundary location/);
     });
@@ -93,19 +117,25 @@ describe('receipts', () => {
   describe('editing and transitioning', () => {
     let receipt;
     beforeEach(async () => {
-      const res = await request(app).post('/api/v1/receipts').set(auth(manager.token)).send(reqBody());
+      const res = await request(app)
+        .post('/api/v1/receipts')
+        .set(auth(manager.token))
+        .send(reqBody());
       receipt = res.body.data;
     });
 
     it('can edit a draft receipt', async () => {
-      const res = await request(app).put(`/api/v1/receipts/${receipt.id}`).set(auth(manager.token)).send({
-        partnerId: partner2.id,
-        warehouseId: warehouse.id,
-        lines: [
-          { productId: product.id, quantity: '10', destinationLocationId: loc.store.id },
-          { productId: product2.id, quantity: '20', destinationLocationId: loc.store.id },
-        ],
-      });
+      const res = await request(app)
+        .put(`/api/v1/receipts/${receipt.id}`)
+        .set(auth(manager.token))
+        .send({
+          partnerId: partner2.id,
+          warehouseId: warehouse.id,
+          lines: [
+            { productId: product.id, quantity: '10', destinationLocationId: loc.store.id },
+            { productId: product2.id, quantity: '20', destinationLocationId: loc.store.id },
+          ],
+        });
       expect(res.status).toBe(200);
       expect(res.body.data.partnerId).toBe(partner2.id);
       expect(res.body.data.lines).toHaveLength(2);
@@ -113,32 +143,52 @@ describe('receipts', () => {
 
     it('can transition through the state machine', async () => {
       // DRAFT -> WAITING
-      let res = await request(app).patch(`/api/v1/receipts/${receipt.id}/status`).set(auth(manager.token)).send({ state: 'WAITING' });
+      let res = await request(app)
+        .patch(`/api/v1/receipts/${receipt.id}/status`)
+        .set(auth(manager.token))
+        .send({ state: 'WAITING' });
       expect(res.status).toBe(200);
       expect(res.body.data.state).toBe('WAITING');
 
       // WAITING -> READY
-      res = await request(app).patch(`/api/v1/receipts/${receipt.id}/status`).set(auth(manager.token)).send({ state: 'READY' });
+      res = await request(app)
+        .patch(`/api/v1/receipts/${receipt.id}/status`)
+        .set(auth(manager.token))
+        .send({ state: 'READY' });
       expect(res.status).toBe(200);
       expect(res.body.data.state).toBe('READY');
 
       // Cannot edit a non-draft
-      res = await request(app).put(`/api/v1/receipts/${receipt.id}`).set(auth(manager.token)).send(reqBody());
+      res = await request(app)
+        .put(`/api/v1/receipts/${receipt.id}`)
+        .set(auth(manager.token))
+        .send(reqBody());
       expect(res.status).toBe(400);
 
       // Validate
-      res = await request(app).post(`/api/v1/receipts/${receipt.id}/validate`).set(auth(manager.token)).set('Idempotency-Key', unique('key')).send({});
+      res = await request(app)
+        .post(`/api/v1/receipts/${receipt.id}/validate`)
+        .set(auth(manager.token))
+        .set('Idempotency-Key', unique('key'))
+        .send({});
       expect(res.status).toBe(200);
       expect(res.body.data.state).toBe('DONE');
     });
 
     it('can cancel a draft receipt', async () => {
-      const res = await request(app).post(`/api/v1/receipts/${receipt.id}/cancel`).set(auth(manager.token)).send();
+      const res = await request(app)
+        .post(`/api/v1/receipts/${receipt.id}/cancel`)
+        .set(auth(manager.token))
+        .send();
       expect(res.status).toBe(200);
       expect(res.body.data.state).toBe('CANCELLED');
 
       // Validate on cancelled fails
-      const val = await request(app).post(`/api/v1/receipts/${receipt.id}/validate`).set(auth(manager.token)).set('Idempotency-Key', unique('key')).send({});
+      const val = await request(app)
+        .post(`/api/v1/receipts/${receipt.id}/validate`)
+        .set(auth(manager.token))
+        .set('Idempotency-Key', unique('key'))
+        .send({});
       expect(val.status).toBe(409);
     });
   });
@@ -147,44 +197,72 @@ describe('receipts', () => {
     it('validates a multi-line receipt and rolls back on partial failure', async () => {
       const p1 = await createProduct();
       const p2 = await createProduct();
-      
+
       // Create multi-line receipt
-      const res = await request(app).post('/api/v1/receipts').set(auth(manager.token)).send(reqBody({
-        lines: [
-          { productId: p1.id, quantity: '100.0000', destinationLocationId: loc.store.id },
-          { productId: p2.id, quantity: '20.0000', destinationLocationId: loc.store.id },
-        ]
-      }));
+      const res = await request(app)
+        .post('/api/v1/receipts')
+        .set(auth(manager.token))
+        .send(
+          reqBody({
+            lines: [
+              { productId: p1.id, quantity: '100.0000', destinationLocationId: loc.store.id },
+              { productId: p2.id, quantity: '20.0000', destinationLocationId: loc.store.id },
+            ],
+          }),
+        );
       const receipt = res.body.data;
-      
-      const valRes = await request(app).post(`/api/v1/receipts/${receipt.id}/validate`).set(auth(manager.token)).set('Idempotency-Key', unique('key')).send({});
+
+      const valRes = await request(app)
+        .post(`/api/v1/receipts/${receipt.id}/validate`)
+        .set(auth(manager.token))
+        .set('Idempotency-Key', unique('key'))
+        .send({});
       expect(valRes.status).toBe(200);
-      
-      const quant1 = await prisma.stockQuant.findUnique({ where: { productId_locationId: { productId: p1.id, locationId: loc.store.id } } });
-      const quant2 = await prisma.stockQuant.findUnique({ where: { productId_locationId: { productId: p2.id, locationId: loc.store.id } } });
+
+      const quant1 = await prisma.stockQuant.findUnique({
+        where: { productId_locationId: { productId: p1.id, locationId: loc.store.id } },
+      });
+      const quant2 = await prisma.stockQuant.findUnique({
+        where: { productId_locationId: { productId: p2.id, locationId: loc.store.id } },
+      });
       expect(quant1.onHand.toString()).toBe('100');
       expect(quant2.onHand.toString()).toBe('20');
-      
+
       const moves = await prisma.stockMove.count({ where: { documentId: receipt.id } });
       expect(moves).toBe(2);
     });
 
     it('handles idempotent replays correctly (Case A and B)', async () => {
-      const res = await request(app).post('/api/v1/receipts').set(auth(manager.token)).send(reqBody());
+      const res = await request(app)
+        .post('/api/v1/receipts')
+        .set(auth(manager.token))
+        .send(reqBody());
       const receipt = res.body.data;
 
       const key = unique('val-key');
       // Validate
-      const val1 = await request(app).post(`/api/v1/receipts/${receipt.id}/validate`).set(auth(manager.token)).set('Idempotency-Key', key).send({});
+      const val1 = await request(app)
+        .post(`/api/v1/receipts/${receipt.id}/validate`)
+        .set(auth(manager.token))
+        .set('Idempotency-Key', key)
+        .send({});
       expect(val1.status).toBe(200);
 
       // Case A: same key replay
-      const val2 = await request(app).post(`/api/v1/receipts/${receipt.id}/validate`).set(auth(manager.token)).set('Idempotency-Key', key).send({});
+      const val2 = await request(app)
+        .post(`/api/v1/receipts/${receipt.id}/validate`)
+        .set(auth(manager.token))
+        .set('Idempotency-Key', key)
+        .send({});
       expect(val2.status).toBe(200);
-      expect(val2.headers['idempotent-replayed']).toBe('true');
+      expect(val2.headers['idempotent-replay']).toBe('true');
 
       // Case B: new key after done
-      const val3 = await request(app).post(`/api/v1/receipts/${receipt.id}/validate`).set(auth(manager.token)).set('Idempotency-Key', unique('new-key')).send({});
+      const val3 = await request(app)
+        .post(`/api/v1/receipts/${receipt.id}/validate`)
+        .set(auth(manager.token))
+        .set('Idempotency-Key', unique('new-key'))
+        .send({});
       expect(val3.status).toBe(409); // Conflict, receipt is already DONE
     });
   });
@@ -193,7 +271,10 @@ describe('receipts', () => {
     let receipt;
 
     beforeAll(async () => {
-      const res = await request(app).post('/api/v1/receipts').set(auth(manager.token)).send(reqBody());
+      const res = await request(app)
+        .post('/api/v1/receipts')
+        .set(auth(manager.token))
+        .send(reqBody());
       receipt = res.body.data;
     });
 
@@ -201,11 +282,11 @@ describe('receipts', () => {
       const res = await request(app)
         .get(`/api/v1/receipts?page=1&pageSize=20&search=${partner.name}`)
         .set(auth(manager.token));
-        
+
       expect(res.status).toBe(200);
       expect(res.body.data.pagination).toBeDefined();
       expect(res.body.data.items.length).toBeGreaterThan(0);
-      
+
       const found = res.body.data.items.find((r) => r.id === receipt.id);
       expect(found).toBeDefined();
       expect(found.warehouse.name).toBeDefined();

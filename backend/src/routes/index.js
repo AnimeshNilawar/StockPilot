@@ -10,6 +10,7 @@ const warehouseRoutes = require('./warehouse.routes');
 const locationRoutes = require('./location.routes');
 const stockRoutes = require('./stock.routes');
 const receiptRoutes = require('./receipt.routes');
+const deliveryRoutes = require('./delivery.routes');
 const partnerRoutes = require('./partner.routes');
 const { prisma } = require('../lib/prisma');
 
@@ -48,6 +49,7 @@ router.use(warehouseRoutes);
 router.use(locationRoutes);
 router.use(stockRoutes);
 router.use('/receipts', receiptRoutes);
+router.use('/deliveries', deliveryRoutes);
 router.use('/partners', partnerRoutes);
 
 module.exports = router;

@@ -1,6 +1,7 @@
 const { PrismaClient } = require('@prisma/client');
 const authService = require('../src/services/auth.service');
 const { LOCATION_TYPES } = require('../src/domain/location');
+const { PARTNER_TYPES } = require('../src/domain/partner');
 
 const prisma = new PrismaClient();
 
@@ -121,6 +122,8 @@ async function createPartner(overrides = {}) {
   return prisma.partner.create({
     data: {
       name: overrides.name || unique('Partner'),
+      // Receipts require a partner allowed to supply; override for customer cases.
+      type: overrides.type ?? PARTNER_TYPES.SUPPLIER,
       isActive: overrides.isActive ?? true,
     },
   });
@@ -133,6 +136,108 @@ async function removeUser(userId) {
   await prisma.user.deleteMany({ where: { id: userId } });
 }
 
+/**
+ * Per-suite fixture registry. Jest gives each test file its own module registry,
+ * so this only ever holds rows the calling suite created — which is what makes
+ * it safe to delete by id while other suites run in parallel.
+ */
+const tracked = { partners: [], warehouses: [], products: [], receipts: [], deliveries: [] };
+
+const track = (kind, record) => {
+  tracked[kind].push(record.id);
+  return record;
+};
+
+const createTrackedPartner = async (overrides = {}) =>
+  track('partners', await createPartner(overrides));
+
+const createTrackedProduct = async (overrides = {}) =>
+  track('products', await createProduct(overrides));
+
+const createTrackedWarehouseWithLocations = async (overrides = {}) => {
+  const created = await createWarehouseWithLocations(overrides);
+  track('warehouses', created.warehouse);
+  return created;
+};
+
+const createTrackedReceipt = async (data) =>
+  track('receipts', await prisma.receipt.create({ data }));
+
+/**
+ * Deliveries are normally created through the HTTP API; register one so the
+ * teardown can remove it.
+ */
+const createTrackedDelivery = async (data) =>
+  track('deliveries', await prisma.delivery.create({ data }));
+
+/**
+ * Registers a row a suite created indirectly — through the HTTP API, say — so
+ * `cleanupFixtures` still removes it. Only the id is needed.
+ */
+const trackFixture = (kind, record) => {
+  if (record && record.id) track(kind, record);
+  return record;
+};
+
+/**
+ * Removes tracked fixtures in foreign-key order. Rows that other rows already
+ * reference are deleted first so the teardown cannot fail; anything genuinely
+ * still in use is reported rather than silently left behind.
+ */
+async function cleanupFixtures() {
+  const warehouseIds = tracked.warehouses;
+  const locationIds = warehouseIds.length
+    ? (
+        await prisma.location.findMany({
+          where: { warehouseId: { in: warehouseIds } },
+          select: { id: true },
+        })
+      ).map((l) => l.id)
+    : [];
+  const productIds = tracked.products;
+
+  // Foreign-key order. Rows a suite created through the API are not tracked, so
+  // the steps below also clear anything hanging off the tracked warehouses and
+  // products — a receipt line pointing into a tracked location would otherwise
+  // block its deletion.
+  const steps = [
+    () => prisma.receiptLine.deleteMany({ where: { receiptId: { in: tracked.receipts } } }),
+    () => prisma.receipt.deleteMany({ where: { id: { in: tracked.receipts } } }),
+    () => prisma.receiptLine.deleteMany({ where: { destinationLocationId: { in: locationIds } } }),
+    () => prisma.receipt.deleteMany({ where: { warehouseId: { in: warehouseIds } } }),
+    () => prisma.deliveryLine.deleteMany({ where: { deliveryId: { in: tracked.deliveries } } }),
+    () => prisma.delivery.deleteMany({ where: { id: { in: tracked.deliveries } } }),
+    () => prisma.deliveryLine.deleteMany({ where: { sourceLocationId: { in: locationIds } } }),
+    () => prisma.delivery.deleteMany({ where: { warehouseId: { in: warehouseIds } } }),
+    () =>
+      prisma.stockMove.deleteMany({
+        where: {
+          OR: [{ fromLocationId: { in: locationIds } }, { toLocationId: { in: locationIds } }],
+        },
+      }),
+    () => prisma.stockMove.deleteMany({ where: { productId: { in: productIds } } }),
+    () => prisma.stockQuant.deleteMany({ where: { locationId: { in: locationIds } } }),
+    () => prisma.stockQuant.deleteMany({ where: { productId: { in: productIds } } }),
+    () => prisma.location.deleteMany({ where: { id: { in: locationIds } } }),
+    () => prisma.userWarehouseAccess.deleteMany({ where: { warehouseId: { in: warehouseIds } } }),
+    () => prisma.warehouse.deleteMany({ where: { id: { in: warehouseIds } } }),
+    () => prisma.product.deleteMany({ where: { id: { in: productIds } } }),
+    () => prisma.partner.deleteMany({ where: { id: { in: tracked.partners } } }),
+  ];
+
+  for (const run of steps) {
+    try {
+      await run();
+    } catch (error) {
+      // Teardown must never mask a real test failure, but a silent skip would
+      // leave fixtures behind, so the cause is reported.
+      console.warn('cleanupFixtures: step failed:', error.code || error.name);
+    }
+  }
+
+  for (const ids of Object.values(tracked)) ids.length = 0;
+}
+
 module.exports = {
   prisma,
   unique,
@@ -140,7 +245,14 @@ module.exports = {
   createWarehouseWithLocations,
   createProduct,
   createPartner,
+  createTrackedPartner,
+  createTrackedProduct,
+  createTrackedWarehouseWithLocations,
+  createTrackedReceipt,
+  createTrackedDelivery,
+  trackFixture,
   auth,
   removeUser,
+  cleanupFixtures,
   LOCATION_TYPES,
 };

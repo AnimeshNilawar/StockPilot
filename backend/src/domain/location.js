@@ -30,6 +30,13 @@ const BOUNDARY_TYPES = Object.freeze([LOCATION_TYPES.VENDOR, LOCATION_TYPES.CUST
 const isStockHolding = (type) => STOCK_HOLDING_TYPES.includes(type);
 const isBoundary = (type) => BOUNDARY_TYPES.includes(type);
 
+/**
+ * Stock-holding other than SCRAP — the "ordinary" side of an adjustment. SCRAP
+ * is itself a stock-holding type, so `isStockHolding` alone cannot tell a
+ * write-off from a move between two scrap bins.
+ */
+const isOrdinaryHolding = (type) => isStockHolding(type) && type !== LOCATION_TYPES.SCRAP;
+
 const LOCATION_TYPE_LABELS = Object.freeze({
   INTERNAL: 'Internal',
   VENDOR: 'Vendor',
@@ -46,5 +53,6 @@ module.exports = {
   STOCK_HOLDING_TYPES,
   BOUNDARY_TYPES,
   isStockHolding,
+  isOrdinaryHolding,
   isBoundary,
 };
