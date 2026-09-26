@@ -8,6 +8,9 @@ async function main() {
   const usersCount = await prisma.user.count();
   console.log(`Users:\n  ${usersCount}\n`);
 
+  const partnersCount = await prisma.partner.count();
+  console.log(`Partners:\n  ${partnersCount}\n`);
+
   const warehouses = await prisma.warehouse.findMany({ select: { name: true } });
   console.log(`Warehouses:\n  ${warehouses.length}`);
   warehouses.forEach(w => console.log(`  - ${w.name}`));
@@ -34,6 +37,9 @@ async function main() {
 
   const quantsCount = await prisma.stockQuant.count();
   console.log(`Stock Quants:\n  ${quantsCount}\n`);
+
+  const auditsCount = await prisma.auditLog.count();
+  console.log(`Audit Logs:\n  ${auditsCount}\n`);
 
   const stockQuants = await prisma.stockQuant.findMany({
     include: { product: true, location: true },

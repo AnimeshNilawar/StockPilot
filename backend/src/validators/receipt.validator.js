@@ -8,7 +8,7 @@ const list = z.object({
 });
 
 const create = z.object({
-  supplier: z.string().min(1, 'Supplier is required'),
+  partnerId: z.string().uuid('Partner ID must be a valid UUID'),
   warehouseId: z.string().uuid('Warehouse ID must be a valid UUID'),
   lines: z
     .array(
@@ -27,8 +27,16 @@ const idParam = z.object({
   id: z.string().uuid('Invalid receipt ID'),
 });
 
+const edit = create.extend({});
+
+const transition = z.object({
+  state: z.enum(['WAITING', 'READY']),
+});
+
 module.exports = {
   list,
   create,
+  edit,
+  transition,
   idParam,
 };

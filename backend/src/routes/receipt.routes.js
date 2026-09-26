@@ -20,7 +20,28 @@ router
 
 router
   .route('/:id')
-  .get(validate({ params: receiptValidator.idParam }), receiptController.getById);
+  .get(validate({ params: receiptValidator.idParam }), receiptController.getById)
+  .put(
+    requirePermission('receipt.edit'),
+    validate({ params: receiptValidator.idParam, body: receiptValidator.edit }),
+    receiptController.update,
+  );
+
+router
+  .route('/:id/status')
+  .patch(
+    requirePermission('receipt.edit'),
+    validate({ params: receiptValidator.idParam, body: receiptValidator.transition }),
+    receiptController.transition,
+  );
+
+router
+  .route('/:id/cancel')
+  .post(
+    requirePermission('receipt.edit'),
+    validate({ params: receiptValidator.idParam }),
+    receiptController.cancel,
+  );
 
 router
   .route('/:id/validate')

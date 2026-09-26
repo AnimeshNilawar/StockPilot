@@ -42,6 +42,7 @@ export const can = {
   moveStock: (user) => hasPermission(user, 'stock.move'),
   viewMoveHistory: (user) => hasPermission(user, 'move_history.view'),
   createReceipt: (user) => hasPermission(user, 'receipt.create'),
+  editReceipt: (user) => hasPermission(user, 'receipt.edit'),
   validateReceipt: (user) => hasPermission(user, 'receipt.validate'),
 };
 

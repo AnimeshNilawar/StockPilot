@@ -117,6 +117,15 @@ async function createProduct(overrides = {}) {
   });
 }
 
+async function createPartner(overrides = {}) {
+  return prisma.partner.create({
+    data: {
+      name: overrides.name || unique('Partner'),
+      isActive: overrides.isActive ?? true,
+    },
+  });
+}
+
 const auth = (token) => ({ Authorization: `Bearer ${token}` });
 
 /** Wipes only the fixtures a suite created; the seeded demo data is left alone. */
@@ -130,6 +139,7 @@ module.exports = {
   createUserWithToken,
   createWarehouseWithLocations,
   createProduct,
+  createPartner,
   auth,
   removeUser,
   LOCATION_TYPES,

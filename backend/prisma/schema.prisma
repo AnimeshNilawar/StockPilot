@@ -256,10 +256,12 @@ model IdempotencyKey {
 model Receipt {
   id            String   @id @default(uuid())
   reference     String   @unique
-  supplier      String
+  supplier      String?  // Deprecated: kept to avoid non-interactive drop column error
+  partnerId     String   @map("partner_id")
+  partner       Partner  @relation(fields: [partnerId], references: [id])
   warehouseId   String   @map("warehouse_id")
   warehouse     Warehouse @relation(fields: [warehouseId], references: [id])
-  state         String   @default("DRAFT") // DRAFT | DONE
+  state         String   @default("DRAFT") // DRAFT | WAITING | READY | DONE | CANCELLED
   createdById   String?  @map("created_by")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
@@ -267,7 +269,19 @@ model Receipt {
   lines         ReceiptLine[]
 
   @@index([warehouseId, state])
+  @@index([partnerId])
   @@map("receipts")
+}
+
+model Partner {
+  id          String    @id @default(uuid())
+  name        String    @unique
+  isActive    Boolean   @default(true) @map("is_active")
+  receipts    Receipt[]
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@map("partners")
 }
 
 model ReceiptLine {

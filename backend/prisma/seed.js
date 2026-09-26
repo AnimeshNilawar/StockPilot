@@ -91,6 +91,14 @@ const PRODUCTS = [
   { sku: 'SAFE-GLOVE-001', name: 'Safety Gloves', category: 'Safety Equipment', uom: 'pairs', reorderMin: 15 },
 ];
 
+const PARTNERS = [
+  { name: 'Tata Steel Supplies' },
+  { name: 'Electronics Components Pvt Ltd' },
+  { name: 'Packaging Solutions Ltd' },
+  { name: 'Office Supplies India' },
+  { name: 'Acme Corp' },
+];
+
 async function seedRolesAndPermissions() {
   const roleByName = {};
   for (const roleName of ROLES) {
@@ -212,14 +220,26 @@ async function seedCatalog() {
   return prodBySku;
 }
 
-async function createReceipt(reference, supplier, warehouse, linesData, prodBySku, locByCode, state = DOC_STATES.DONE) {
+async function seedPartners() {
+  const partnerByName = {};
+  for (const p of PARTNERS) {
+    partnerByName[p.name] = await prisma.partner.upsert({
+      where: { name: p.name },
+      update: {},
+      create: p,
+    });
+  }
+  return partnerByName;
+}
+
+async function createReceipt(reference, partner, warehouse, linesData, prodBySku, locByCode, state = DOC_STATES.DONE) {
   const existing = await prisma.receipt.findUnique({ where: { reference } });
   if (existing) return existing; // Idempotency check for receipt creation
 
   const receipt = await prisma.receipt.create({
     data: {
       reference,
-      supplier,
+      partnerId: partner.id,
       warehouseId: warehouse.id,
       state: DOC_STATES.DRAFT,
       lines: {
@@ -260,34 +280,34 @@ async function createReceipt(reference, supplier, warehouse, linesData, prodBySk
   return receipt;
 }
 
-async function seedReceipts(whByCode, prodBySku, locByCode) {
+async function seedReceipts(whByCode, prodBySku, locByCode, partnerByName) {
   // Receipt 1 (DONE) - Pune
-  await createReceipt('RCP-DEMO-001', 'Tata Steel Supplies', whByCode['PUNE-MAIN'], [
+  await createReceipt('RCP-DEMO-001', partnerByName['Tata Steel Supplies'], whByCode['PUNE-MAIN'], [
     { sku: 'RM-STEEL-001', quantity: 100, dest: 'P-STORE' },
     { sku: 'RM-ALU-001', quantity: 60, dest: 'P-STORE' }
   ], prodBySku, locByCode, DOC_STATES.DONE);
 
   // Receipt 2 (DONE) - Pune
-  await createReceipt('RCP-DEMO-002', 'Electronics Components Pvt Ltd', whByCode['PUNE-MAIN'], [
+  await createReceipt('RCP-DEMO-002', partnerByName['Electronics Components Pvt Ltd'], whByCode['PUNE-MAIN'], [
     { sku: 'ELEC-SENSOR-001', quantity: 25, dest: 'P-STORE' },
     { sku: 'ELEC-RELAY-001', quantity: 50, dest: 'P-STORE' }
   ], prodBySku, locByCode, DOC_STATES.DONE);
 
   // Receipt 3 (DONE) - Pune
-  await createReceipt('RCP-DEMO-003', 'Packaging Solutions Ltd', whByCode['PUNE-MAIN'], [
+  await createReceipt('RCP-DEMO-003', partnerByName['Packaging Solutions Ltd'], whByCode['PUNE-MAIN'], [
     { sku: 'PKG-BOX-L', quantity: 200, dest: 'P-STORE' },
     { sku: 'PKG-BUBBLE-001', quantity: 40, dest: 'P-STORE' },
     { sku: 'PKG-TAPE-001', quantity: 100, dest: 'P-STORE' }
   ], prodBySku, locByCode, DOC_STATES.DONE);
 
   // Receipt 4 (DONE) - Mumbai
-  await createReceipt('RCP-DEMO-004', 'Office Supplies India', whByCode['MUM-DIST'], [
+  await createReceipt('RCP-DEMO-004', partnerByName['Office Supplies India'], whByCode['MUM-DIST'], [
     { sku: 'OFF-PAPER-001', quantity: 50, dest: 'M-STORE' },
     { sku: 'SAFE-GLOVE-001', quantity: 80, dest: 'M-STORE' }
   ], prodBySku, locByCode, DOC_STATES.DONE);
 
   // Receipt 5 (DRAFT) - Pune
-  await createReceipt('RCP-DEMO-005', 'Tata Steel Supplies', whByCode['PUNE-MAIN'], [
+  await createReceipt('RCP-DEMO-005', partnerByName['Tata Steel Supplies'], whByCode['PUNE-MAIN'], [
     { sku: 'RM-COPPER-001', quantity: 20, dest: 'P-STORE' }
   ], prodBySku, locByCode, DOC_STATES.DRAFT);
 }
@@ -327,8 +347,9 @@ async function main() {
   const { whByCode, locByCode } = await seedWarehousesAndLocations();
   await seedUsers(roleByName, whByCode);
   const prodBySku = await seedCatalog();
+  const partnerByName = await seedPartners();
   
-  await seedReceipts(whByCode, prodBySku, locByCode);
+  await seedReceipts(whByCode, prodBySku, locByCode, partnerByName);
   await seedInternalMovements(prodBySku, locByCode);
 
   console.log('Demo Data Seeding Complete.');
