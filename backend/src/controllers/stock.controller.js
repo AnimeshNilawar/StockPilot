@@ -212,6 +212,227 @@ class StockController {
     });
   }
 
+  /**
+   * Dedicated Dashboard KPI and summary endpoint.
+   * Performs server-side aggregation for products, low stock, out of stock,
+   * pending receipts, pending deliveries, scheduled transfers, and recent activities.
+   */
+  async dashboard(req, res) {
+    const { warehouseId, locationId, categoryId } = req.valid.query;
+
+    const whFilter = warehouseFilter(req.user, warehouseId);
+    const locationCondition = {
+      isActive: true,
+      ...whFilter,
+      ...(locationId ? { id: locationId } : {}),
+    };
+
+    // 1. Fetch active products matching category filter
+    const productWhere = {
+      isActive: true,
+      ...(categoryId ? { categoryId } : {}),
+    };
+
+    const products = await prisma.product.findMany({
+      where: productWhere,
+      select: {
+        id: true,
+        sku: true,
+        name: true,
+        reorderMin: true,
+        categoryId: true,
+        category: { select: { id: true, name: true } },
+        uom: { select: { code: true } },
+      },
+    });
+
+    // 2. Aggregate quants by product
+    const quantTotals = await prisma.stockQuant.groupBy({
+      by: ['productId'],
+      where: { location: locationCondition },
+      _sum: { onHand: true, reservedQuantity: true },
+    });
+    const totalByProduct = new Map(quantTotals.map((q) => [q.productId, q._sum]));
+
+    let totalProductsInStock = 0;
+    let lowStockCount = 0;
+    let outOfStockCount = 0;
+    const lowStockItems = [];
+
+    for (const product of products) {
+      const sums = totalByProduct.get(product.id) || {};
+      const onHand = new Prisma.Decimal(sums.onHand || 0);
+      const reservedQuantity = new Prisma.Decimal(sums.reservedQuantity || 0);
+      const reorderMin = new Prisma.Decimal(product.reorderMin || 0);
+
+      if (onHand.gt(ZERO)) {
+        totalProductsInStock++;
+      }
+
+      if (onHand.lte(ZERO)) {
+        outOfStockCount++;
+        lowStockItems.push({
+          id: product.id,
+          sku: product.sku,
+          name: product.name,
+          category: product.category?.name || '—',
+          onHand,
+          reservedQuantity,
+          freeToUse: onHand.minus(reservedQuantity),
+          reorderMin,
+          shortfall: reorderMin.minus(onHand),
+          isOutOfStock: true,
+          uom: product.uom?.code || '',
+        });
+      } else if (onHand.lte(reorderMin)) {
+        lowStockCount++;
+        lowStockItems.push({
+          id: product.id,
+          sku: product.sku,
+          name: product.name,
+          category: product.category?.name || '—',
+          onHand,
+          reservedQuantity,
+          freeToUse: onHand.minus(reservedQuantity),
+          reorderMin,
+          shortfall: reorderMin.minus(onHand),
+          isOutOfStock: false,
+          uom: product.uom?.code || '',
+        });
+      }
+    }
+
+    // Sort low stock items by shortfall descending
+    lowStockItems.sort((a, b) => (b.shortfall.gt(a.shortfall) ? 1 : -1));
+
+    // 3. Document status counts scoped to accessible warehouses
+    const docWhWhere = isWarehouseScoped(req.user)
+      ? { warehouseId: { in: warehouseIdsOf(req.user) } }
+      : warehouseId
+      ? { warehouseId }
+      : {};
+
+    const [
+      pendingReceipts,
+      pendingDeliveries,
+      scheduledTransfers,
+      pendingAdjustments,
+      recentReceipts,
+      recentDeliveries,
+      recentMoves,
+    ] = await Promise.all([
+      prisma.receipt.count({
+        where: {
+          ...docWhWhere,
+          state: { in: ['DRAFT', 'WAITING', 'READY'] },
+        },
+      }),
+      prisma.delivery.count({
+        where: {
+          ...docWhWhere,
+          state: { in: ['DRAFT', 'WAITING', 'READY'] },
+        },
+      }),
+      prisma.internalTransfer.count({
+        where: {
+          ...docWhWhere,
+          state: { in: ['DRAFT', 'READY'] },
+        },
+      }),
+      prisma.adjustment.count({
+        where: {
+          ...docWhWhere,
+          state: { in: ['DRAFT', 'READY'] },
+        },
+      }),
+      prisma.receipt.findMany({
+        where: {
+          ...docWhWhere,
+          state: { in: ['DRAFT', 'WAITING', 'READY'] },
+        },
+        take: 5,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          partner: { select: { name: true } },
+          warehouse: { select: { name: true, shortCode: true } },
+          lines: { select: { id: true } },
+        },
+      }),
+      prisma.delivery.findMany({
+        where: {
+          ...docWhWhere,
+          state: { in: ['DRAFT', 'WAITING', 'READY'] },
+        },
+        take: 5,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          partner: { select: { name: true } },
+          warehouse: { select: { name: true, shortCode: true } },
+          lines: { select: { id: true } },
+        },
+      }),
+      prisma.stockMove.findMany({
+        where: {
+          state: 'DONE',
+          ...(moveWarehouseScope(req.user, warehouseId) ? { AND: [moveWarehouseScope(req.user, warehouseId)] } : {}),
+        },
+        take: 6,
+        orderBy: [{ doneDate: 'desc' }, { id: 'desc' }],
+        include: {
+          product: { select: { sku: true, name: true, uom: { select: { code: true } } } },
+          fromLocation: { select: { name: true, type: true } },
+          toLocation: { select: { name: true, type: true } },
+        },
+      }),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        kpis: {
+          totalProductsInStock,
+          lowStockCount,
+          outOfStockCount,
+          pendingReceipts,
+          pendingDeliveries,
+          scheduledTransfers,
+          pendingAdjustments,
+        },
+        lowStockItems: lowStockItems.slice(0, 10),
+        recentReceipts: recentReceipts.map((r) => ({
+          id: r.id,
+          reference: r.reference,
+          partner: r.partner?.name || '—',
+          warehouse: r.warehouse.name,
+          lineCount: r.lines.length,
+          state: r.state,
+          createdAt: r.createdAt,
+        })),
+        recentDeliveries: recentDeliveries.map((d) => ({
+          id: d.id,
+          reference: d.reference,
+          partner: d.partner?.name || '—',
+          warehouse: d.warehouse.name,
+          lineCount: d.lines.length,
+          state: d.state,
+          createdAt: d.createdAt,
+        })),
+        recentMoves: recentMoves.map((m) => ({
+          id: m.id,
+          reference: m.reference,
+          documentType: m.documentType,
+          productSku: m.product.sku,
+          productName: m.product.name,
+          quantity: m.quantity,
+          uom: m.product.uom?.code || '',
+          fromLocation: m.fromLocation.name,
+          toLocation: m.toLocation.name,
+          doneDate: m.doneDate || m.createdAt,
+        })),
+      },
+    });
+  }
+
   /** Warehouse-level roll-up per product: on hand, reserved and free. */
   async summary(req, res) {
     const { productIds, warehouseId } = req.valid.query;

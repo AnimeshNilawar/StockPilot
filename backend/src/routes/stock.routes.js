@@ -9,6 +9,12 @@ const { validate } = require('../utils/query');
 // Literal paths come before the `:id` pattern so `/stock/summary` is never
 // swallowed as an identifier.
 router.get(
+  '/dashboard',
+  requireAuth,
+  validate({ query: schemas.dashboardQuery }),
+  stockController.dashboard.bind(stockController),
+);
+router.get(
   '/stock',
   requireAuth,
   validate({ query: schemas.quantList }),

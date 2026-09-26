@@ -23,7 +23,7 @@ async function createUserWithToken(
 
   const user = await prisma.user.create({
     data: {
-      email: email || unique(`${roleName.toLowerCase()}@test.local`),
+      email: email || `${unique(roleName.toLowerCase()).replace(/[^a-z0-9]/gi, '')}@test.local`,
       name: `${roleName} test user`,
       passwordHash: await authService.hashPassword(password),
       roleId: role.id,

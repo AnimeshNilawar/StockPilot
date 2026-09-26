@@ -27,6 +27,12 @@ const quantList = z
 
 const lowStockList = z.object({ ...stockScope }).extend(paginationSchema.shape);
 
+const dashboardQuery = z.object({
+  warehouseId: z.string().uuid().optional(),
+  locationId: z.string().uuid().optional(),
+  categoryId: z.string().uuid().optional(),
+});
+
 const stockSummary = z.object({
   warehouseId: z.string().uuid().optional(),
   productIds: z
@@ -96,6 +102,7 @@ module.exports = {
   idParam,
   quantList,
   lowStockList,
+  dashboardQuery,
   stockSummary,
   reconcile,
   moveList,

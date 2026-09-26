@@ -7,12 +7,14 @@ const rateLimit = require('express-rate-limit');
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
+  skip: () => process.env.NODE_ENV === 'test',
   message: { success: false, message: 'Too many login attempts', code: 'RATE_LIMIT' },
 });
 
 const resetLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 5,
+  skip: () => process.env.NODE_ENV === 'test',
   message: { success: false, message: 'Too many reset attempts', code: 'RATE_LIMIT' },
 });
 

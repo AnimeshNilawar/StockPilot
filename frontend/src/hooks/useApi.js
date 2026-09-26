@@ -105,9 +105,21 @@ export const catalogKeys = {
   locationsFor: (warehouseId) => ['locations', 'by-warehouse', warehouseId],
   stock: ['stock'],
   moves: ['moves'],
+  users: ['users'],
+  roles: ['roles'],
 };
 
 export const api = {
+  users: {
+    list: (params) => http.get(`/users${toQueryString(params)}`),
+    roles: () => http.get('/users/roles'),
+    get: (id) => http.get(`/users/${id}`),
+    create: (body) => http.post('/users', body),
+    update: (id, body) => http.patch(`/users/${id}`, body),
+    updateRole: (id, body) => http.patch(`/users/${id}/role`, body),
+    updateWarehouseAccess: (id, body) => http.patch(`/users/${id}/warehouse-access`, body),
+    updateStatus: (id, body) => http.patch(`/users/${id}/status`, body),
+  },
   products: {
     list: (params) => http.get(`/products${toQueryString(params)}`),
     get: (id) => http.get(`/products/${id}`),

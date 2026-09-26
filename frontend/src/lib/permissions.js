@@ -31,23 +31,23 @@ export const hasAnyPermission = (user, actions = []) =>
 
 export const can = {
   manageUsers: (user) => hasPermission(user, 'user.manage'),
-  // Categories and UOMs are part of the product catalogue, and the API gates
-  // their writes on `product.write`; there are no separate actions for them.
+  readProducts: (user) => hasPermission(user, 'product.read'),
   writeCategories: (user) => hasPermission(user, 'product.write'),
   writeUoms: (user) => hasPermission(user, 'product.write'),
   writeProducts: (user) => hasPermission(user, 'product.write'),
+  readWarehouses: (user) => hasPermission(user, 'warehouse.read'),
   writeWarehouses: (user) => hasPermission(user, 'warehouse.write'),
+  readLocations: (user) => hasPermission(user, 'location.read'),
   writeLocations: (user) => hasPermission(user, 'location.write'),
   readStock: (user) => hasPermission(user, 'stock.read'),
   moveStock: (user) => hasPermission(user, 'stock.move'),
-  viewMoveHistory: (user) => hasPermission(user, 'move_history.view'),
+  viewMoveHistory: (user) => hasPermission(user, 'move_history.view') || hasPermission(user, 'stock.read'),
+  viewDashboard: (user) => hasPermission(user, 'dashboard.view_all') || hasPermission(user, 'stock.read'),
   createReceipt: (user) => hasPermission(user, 'receipt.create'),
   editReceipt: (user) => hasPermission(user, 'receipt.edit'),
   validateReceipt: (user) => hasPermission(user, 'receipt.validate'),
   createDelivery: (user) => hasPermission(user, 'delivery.create'),
   editDelivery: (user) => hasPermission(user, 'delivery.edit'),
-  // Picking is a separate action from editing because it is the step that takes
-  // the claim on real stock, so the UI shows it as its own decision.
   pickDelivery: (user) => hasPermission(user, 'delivery.pick'),
   validateDelivery: (user) => hasPermission(user, 'delivery.validate'),
   createTransfer: (user) => hasPermission(user, 'internal_transfer.create'),

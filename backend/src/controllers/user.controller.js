@@ -1,69 +1,216 @@
-const { z } = require('zod');
+const { prisma } = require('../lib/prisma');
+const { parsePagination, paginated } = require('../utils/query');
+const { notFound, badRequest } = require('../utils/appError');
 const auditService = require('../services/audit.service');
 const authService = require('../services/auth.service');
-const { prisma } = require('../lib/prisma');
-
-const createUserSchema = z.object({
-  email: z.string().email().toLowerCase(),
-  password: z.string().min(8),
-  name: z.string().optional(),
-  roleId: z.string().uuid(),
-});
-
-const updateUserSchema = z.object({
-  name: z.string().optional(),
-  status: z.enum(['ACTIVE', 'INACTIVE']).optional(),
-});
-
-const updateRoleSchema = z.object({
-  roleId: z.string().uuid(),
-});
-
-const assignWarehousesSchema = z.object({
-  warehouseIds: z.array(z.string().uuid()),
-});
 
 class UserController {
-  async list(req, res, next) {
+  /** List all roles available in the system */
+  async listRoles(req, res, next) {
     try {
-      const users = await prisma.user.findMany({
-        select: {
-          id: true,
-          email: true,
-          name: true,
-          status: true,
-          role: { select: { id: true, name: true } },
-          createdAt: true,
-        },
+      const roles = await prisma.role.findMany({
+        orderBy: { name: 'asc' },
+        select: { id: true, name: true },
       });
-      res.status(200).json({ success: true, data: users });
+      res.status(200).json({ success: true, data: roles });
     } catch (error) {
       next(error);
     }
   }
 
+  /**
+   * Paginated list of users with composable filters:
+   * - search (name or email)
+   * - roleId or role (name)
+   * - status ('ACTIVE' | 'INACTIVE')
+   * - warehouseId (users assigned to this warehouse)
+   */
+  async list(req, res, next) {
+    try {
+      const { page, pageSize, skip, take } = parsePagination(req.valid.query);
+      const { search, roleId, role, status, warehouseId } = req.valid.query;
+
+      const where = {
+        ...(status ? { status } : {}),
+        ...(roleId ? { roleId } : {}),
+        ...(role ? { role: { name: role } } : {}),
+        ...(search
+          ? {
+              OR: [
+                { name: { contains: search, mode: 'insensitive' } },
+                { email: { contains: search, mode: 'insensitive' } },
+              ],
+            }
+          : {}),
+        ...(warehouseId
+          ? {
+              warehouseAccess: {
+                some: { warehouseId },
+              },
+            }
+          : {}),
+      };
+
+      const [users, total] = await Promise.all([
+        prisma.user.findMany({
+          where,
+          skip,
+          take,
+          orderBy: { createdAt: 'desc' },
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            status: true,
+            roleId: true,
+            role: { select: { id: true, name: true } },
+            warehouseAccess: {
+              select: {
+                warehouseId: true,
+                warehouse: { select: { id: true, name: true, shortCode: true } },
+              },
+            },
+            createdAt: true,
+            updatedAt: true,
+          },
+        }),
+        prisma.user.count({ where }),
+      ]);
+
+      const formatted = users.map((u) => ({
+        id: u.id,
+        email: u.email,
+        name: u.name,
+        status: u.status,
+        roleId: u.roleId,
+        role: u.role,
+        warehouses: u.warehouseAccess.map((wa) => wa.warehouse),
+        createdAt: u.createdAt,
+        updatedAt: u.updatedAt,
+      }));
+
+      res.status(200).json({ success: true, data: paginated(formatted, total, { page, pageSize }) });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /** Get a single user by ID */
+  async get(req, res, next) {
+    try {
+      const { id } = req.valid.params;
+      const user = await prisma.user.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          status: true,
+          roleId: true,
+          role: {
+            select: {
+              id: true,
+              name: true,
+              permissions: { select: { permission: { select: { action: true } } } },
+            },
+          },
+          warehouseAccess: {
+            select: {
+              warehouseId: true,
+              warehouse: { select: { id: true, name: true, shortCode: true } },
+            },
+          },
+          createdAt: true,
+          updatedAt: true,
+        },
+      });
+
+      if (!user) throw notFound('User not found');
+
+      res.status(200).json({
+        success: true,
+        data: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          status: user.status,
+          roleId: user.roleId,
+          role: {
+            id: user.role.id,
+            name: user.role.name,
+            permissions: user.role.permissions.map((p) => p.permission.action),
+          },
+          warehouses: user.warehouseAccess.map((wa) => wa.warehouse),
+          createdAt: user.createdAt,
+          updatedAt: user.updatedAt,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /** Create a new user with role and optional warehouse assignments */
   async create(req, res, next) {
     try {
-      const { email, password, name, roleId } = createUserSchema.parse(req.body);
+      const { email, password, name, roleId, warehouseIds, status } = req.valid.body;
 
       const existing = await prisma.user.findUnique({ where: { email } });
       if (existing) {
-        return res
-          .status(400)
-          .json({ success: false, message: 'Email in use', code: 'EMAIL_IN_USE' });
+        throw badRequest('Email is already in use', 'EMAIL_IN_USE');
       }
 
       const role = await prisma.role.findUnique({ where: { id: roleId } });
       if (!role) {
-        return res
-          .status(400)
-          .json({ success: false, message: 'Invalid role', code: 'INVALID_ROLE' });
+        throw badRequest('Invalid role specified', 'INVALID_ROLE');
+      }
+
+      // Verify all warehouses if provided
+      if (warehouseIds && warehouseIds.length > 0) {
+        const foundWarehouses = await prisma.warehouse.findMany({
+          where: { id: { in: warehouseIds } },
+          select: { id: true },
+        });
+        if (foundWarehouses.length !== warehouseIds.length) {
+          throw badRequest('One or more warehouse IDs are invalid', 'INVALID_WAREHOUSE');
+        }
       }
 
       const passwordHash = await authService.hashPassword(password);
-      const user = await prisma.user.create({
-        data: { email, passwordHash, name, roleId },
-        select: { id: true, email: true, name: true, role: { select: { name: true } } },
+
+      const user = await prisma.$transaction(async (tx) => {
+        const created = await tx.user.create({
+          data: {
+            email,
+            passwordHash,
+            name,
+            roleId,
+            status: status || 'ACTIVE',
+          },
+        });
+
+        if (warehouseIds && warehouseIds.length > 0) {
+          await tx.userWarehouseAccess.createMany({
+            data: warehouseIds.map((wId) => ({ userId: created.id, warehouseId: wId })),
+          });
+        }
+
+        return tx.user.findUnique({
+          where: { id: created.id },
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            status: true,
+            role: { select: { id: true, name: true } },
+            warehouseAccess: {
+              select: {
+                warehouse: { select: { id: true, name: true, shortCode: true } },
+              },
+            },
+            createdAt: true,
+          },
+        });
       });
 
       await auditService.log({
@@ -71,113 +218,307 @@ class UserController {
         action: 'USER_CREATED',
         entityType: 'User',
         entityId: user.id,
+        metadata: {
+          targetUserId: user.id,
+          email: user.email,
+          name: user.name,
+          role: user.role.name,
+          warehouseIds: warehouseIds || [],
+          status: user.status,
+        },
         ip: req.ip,
       });
 
-      res.status(201).json({ success: true, data: user });
+      res.status(201).json({
+        success: true,
+        data: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          status: user.status,
+          role: user.role,
+          warehouses: user.warehouseAccess.map((wa) => wa.warehouse),
+          createdAt: user.createdAt,
+        },
+      });
     } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res
-          .status(400)
-          .json({ success: false, message: 'Validation failed', code: 'VALIDATION_ERROR' });
-      }
       next(error);
     }
   }
 
+  /**
+   * General user update (name, status, roleId, warehouseIds)
+   */
   async update(req, res, next) {
     try {
-      const { id } = req.params;
-      const data = updateUserSchema.parse(req.body);
+      const { id } = req.valid.params;
+      const { name, status, roleId, warehouseIds } = req.valid.body;
 
-      const user = await prisma.user.update({
+      const targetUser = await prisma.user.findUnique({
         where: { id },
-        data,
-        select: { id: true, email: true, name: true, status: true },
+        include: {
+          role: true,
+          warehouseAccess: true,
+        },
       });
+      if (!targetUser) throw notFound('User not found');
 
-      if (data.status === 'INACTIVE') {
-        await authService.revokeAllUserSessions(user.id);
+      // Check self-lockout if changing status or role of an ADMIN
+      if (targetUser.role.name === 'ADMIN') {
+        const willDeactivate = status === 'INACTIVE';
+        let willDemote = false;
+        if (roleId) {
+          const newRole = await prisma.role.findUnique({ where: { id: roleId } });
+          if (!newRole) throw badRequest('Invalid role specified', 'INVALID_ROLE');
+          if (newRole.name !== 'ADMIN') willDemote = true;
+        }
+
+        if ((willDeactivate || willDemote) && targetUser.status === 'ACTIVE') {
+          const otherActiveAdmins = await prisma.user.count({
+            where: {
+              id: { not: id },
+              status: 'ACTIVE',
+              role: { name: 'ADMIN' },
+            },
+          });
+          if (otherActiveAdmins === 0) {
+            throw badRequest(
+              'Cannot deactivate or demote the last active administrator',
+              'LAST_ADMIN_LOCKOUT_PROTECTION',
+            );
+          }
+        }
       }
 
-      await auditService.log({
-        userId: req.user.id,
-        action: 'USER_UPDATED',
-        entityType: 'User',
-        entityId: user.id,
-        metadata: data,
-        ip: req.ip,
+      if (warehouseIds) {
+        if (warehouseIds.length > 0) {
+          const found = await prisma.warehouse.findMany({
+            where: { id: { in: warehouseIds } },
+            select: { id: true },
+          });
+          if (found.length !== warehouseIds.length) {
+            throw badRequest('One or more warehouse IDs are invalid', 'INVALID_WAREHOUSE');
+          }
+        }
+      }
+
+      const updatedUser = await prisma.$transaction(async (tx) => {
+        const updateData = {};
+        if (name !== undefined) updateData.name = name;
+        if (status !== undefined) updateData.status = status;
+        if (roleId !== undefined) updateData.roleId = roleId;
+
+        if (Object.keys(updateData).length > 0) {
+          await tx.user.update({
+            where: { id },
+            data: updateData,
+          });
+        }
+
+        if (warehouseIds !== undefined) {
+          await tx.userWarehouseAccess.deleteMany({ where: { userId: id } });
+          if (warehouseIds.length > 0) {
+            await tx.userWarehouseAccess.createMany({
+              data: warehouseIds.map((wId) => ({ userId: id, warehouseId: wId })),
+            });
+          }
+        }
+
+        return tx.user.findUnique({
+          where: { id },
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            status: true,
+            role: { select: { id: true, name: true } },
+            warehouseAccess: {
+              select: {
+                warehouse: { select: { id: true, name: true, shortCode: true } },
+              },
+            },
+            updatedAt: true,
+          },
+        });
       });
 
-      res.status(200).json({ success: true, data: user });
+      // Revoke sessions if deactivated or role changed
+      if (status === 'INACTIVE' || (roleId && roleId !== targetUser.roleId)) {
+        await authService.revokeAllUserSessions(id);
+      }
+
+      // Audit logs
+      if (roleId && roleId !== targetUser.roleId) {
+        await auditService.log({
+          userId: req.user.id,
+          action: 'USER_ROLE_CHANGED',
+          entityType: 'User',
+          entityId: id,
+          metadata: {
+            targetUserId: id,
+            previousRoleId: targetUser.roleId,
+            previousRole: targetUser.role.name,
+            newRoleId: roleId,
+            newRole: updatedUser.role.name,
+          },
+          ip: req.ip,
+        });
+      }
+
+      if (warehouseIds !== undefined) {
+        const prevWhs = targetUser.warehouseAccess.map((wa) => wa.warehouseId);
+        await auditService.log({
+          userId: req.user.id,
+          action: 'USER_WAREHOUSE_ACCESS_CHANGED',
+          entityType: 'User',
+          entityId: id,
+          metadata: {
+            targetUserId: id,
+            previousWarehouseIds: prevWhs,
+            newWarehouseIds: warehouseIds,
+          },
+          ip: req.ip,
+        });
+      }
+
+      if (status !== undefined && status !== targetUser.status) {
+        await auditService.log({
+          userId: req.user.id,
+          action: 'USER_STATUS_CHANGED',
+          entityType: 'User',
+          entityId: id,
+          metadata: {
+            targetUserId: id,
+            previousStatus: targetUser.status,
+            newStatus: status,
+          },
+          ip: req.ip,
+        });
+      }
+
+      res.status(200).json({
+        success: true,
+        data: {
+          id: updatedUser.id,
+          email: updatedUser.email,
+          name: updatedUser.name,
+          status: updatedUser.status,
+          role: updatedUser.role,
+          warehouses: updatedUser.warehouseAccess.map((wa) => wa.warehouse),
+          updatedAt: updatedUser.updatedAt,
+        },
+      });
     } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res
-          .status(400)
-          .json({ success: false, message: 'Validation failed', code: 'VALIDATION_ERROR' });
-      }
       next(error);
     }
   }
 
+  /**
+   * Change user role specifically
+   */
   async updateRole(req, res, next) {
     try {
-      const { id } = req.params;
-      const { roleId } = updateRoleSchema.parse(req.body);
+      const { id } = req.valid.params;
+      const { roleId, role: roleName } = req.valid.body;
 
-      const role = await prisma.role.findUnique({ where: { id: roleId } });
-      if (!role) {
-        return res
-          .status(400)
-          .json({ success: false, message: 'Invalid role', code: 'INVALID_ROLE' });
+      const targetUser = await prisma.user.findUnique({
+        where: { id },
+        include: { role: true },
+      });
+      if (!targetUser) throw notFound('User not found');
+
+      let targetRoleId = roleId;
+      let targetRoleRecord;
+      if (roleId) {
+        targetRoleRecord = await prisma.role.findUnique({ where: { id: roleId } });
+      } else if (roleName) {
+        targetRoleRecord = await prisma.role.findUnique({ where: { name: roleName } });
+        if (targetRoleRecord) targetRoleId = targetRoleRecord.id;
       }
 
-      const user = await prisma.user.update({
+      if (!targetRoleRecord) {
+        throw badRequest('Invalid role specified', 'INVALID_ROLE');
+      }
+
+      // Check self-lockout when demoting an active ADMIN to non-ADMIN
+      if (targetUser.role.name === 'ADMIN' && targetRoleRecord.name !== 'ADMIN' && targetUser.status === 'ACTIVE') {
+        const otherActiveAdmins = await prisma.user.count({
+          where: {
+            id: { not: id },
+            status: 'ACTIVE',
+            role: { name: 'ADMIN' },
+          },
+        });
+        if (otherActiveAdmins === 0) {
+          throw badRequest(
+            'Cannot demote the last active administrator',
+            'LAST_ADMIN_LOCKOUT_PROTECTION',
+          );
+        }
+      }
+
+      const updated = await prisma.user.update({
         where: { id },
-        data: { roleId },
-        select: { id: true, email: true, role: { select: { name: true } } },
+        data: { roleId: targetRoleId },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          status: true,
+          role: { select: { id: true, name: true } },
+        },
       });
 
-      // Optional: revoke sessions if role changed, depending on policy.
-      await authService.revokeAllUserSessions(user.id);
+      // Revoke sessions so user re-authenticates with new permissions
+      await authService.revokeAllUserSessions(id);
 
       await auditService.log({
         userId: req.user.id,
         action: 'USER_ROLE_CHANGED',
         entityType: 'User',
-        entityId: user.id,
-        metadata: { newRole: role.name },
+        entityId: id,
+        metadata: {
+          targetUserId: id,
+          previousRoleId: targetUser.role.id,
+          previousRole: targetUser.role.name,
+          newRoleId: updated.role.id,
+          newRole: updated.role.name,
+        },
         ip: req.ip,
       });
 
-      res.status(200).json({ success: true, data: user });
+      res.status(200).json({ success: true, data: updated });
     } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res
-          .status(400)
-          .json({ success: false, message: 'Validation failed', code: 'VALIDATION_ERROR' });
-      }
       next(error);
     }
   }
 
-  async assignWarehouses(req, res, next) {
+  /**
+   * Assign/remove warehouse access for a user
+   */
+  async assignWarehouseAccess(req, res, next) {
     try {
-      const { id } = req.params;
-      const { warehouseIds } = assignWarehousesSchema.parse(req.body);
+      const { id } = req.valid.params;
+      const { warehouseIds } = req.valid.body;
 
-      // Verify user exists
-      const user = await prisma.user.findUnique({ where: { id } });
-      if (!user) {
-        return res
-          .status(404)
-          .json({ success: false, message: 'User not found', code: 'NOT_FOUND' });
+      const targetUser = await prisma.user.findUnique({
+        where: { id },
+        include: { warehouseAccess: true },
+      });
+      if (!targetUser) throw notFound('User not found');
+
+      if (warehouseIds.length > 0) {
+        const found = await prisma.warehouse.findMany({
+          where: { id: { in: warehouseIds } },
+          select: { id: true },
+        });
+        if (found.length !== warehouseIds.length) {
+          throw badRequest('One or more warehouse IDs are invalid', 'INVALID_WAREHOUSE');
+        }
       }
 
       await prisma.$transaction(async (tx) => {
-        // Delete old accesses
         await tx.userWarehouseAccess.deleteMany({ where: { userId: id } });
-        // Create new ones
         if (warehouseIds.length > 0) {
           await tx.userWarehouseAccess.createMany({
             data: warehouseIds.map((wId) => ({ userId: id, warehouseId: wId })),
@@ -185,22 +526,111 @@ class UserController {
         }
       });
 
+      const previousWarehouseIds = targetUser.warehouseAccess.map((wa) => wa.warehouseId);
+
       await auditService.log({
         userId: req.user.id,
         action: 'USER_WAREHOUSE_ACCESS_CHANGED',
         entityType: 'User',
-        entityId: user.id,
-        metadata: { warehouseIds },
+        entityId: id,
+        metadata: {
+          targetUserId: id,
+          previousWarehouseIds,
+          newWarehouseIds: warehouseIds,
+        },
         ip: req.ip,
       });
 
-      res.status(200).json({ success: true, message: 'Warehouses assigned successfully' });
+      const updated = await prisma.user.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          warehouseAccess: {
+            select: {
+              warehouse: { select: { id: true, name: true, shortCode: true } },
+            },
+          },
+        },
+      });
+
+      res.status(200).json({
+        success: true,
+        data: {
+          id: updated.id,
+          email: updated.email,
+          name: updated.name,
+          warehouses: updated.warehouseAccess.map((wa) => wa.warehouse),
+        },
+      });
     } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res
-          .status(400)
-          .json({ success: false, message: 'Validation failed', code: 'VALIDATION_ERROR' });
+      next(error);
+    }
+  }
+
+  /**
+   * Update active/inactive status specifically
+   */
+  async updateStatus(req, res, next) {
+    try {
+      const { id } = req.valid.params;
+      const { status } = req.valid.body;
+
+      const targetUser = await prisma.user.findUnique({
+        where: { id },
+        include: { role: true },
+      });
+      if (!targetUser) throw notFound('User not found');
+
+      // Check self-lockout when deactivating the last active ADMIN
+      if (targetUser.role.name === 'ADMIN' && status === 'INACTIVE' && targetUser.status === 'ACTIVE') {
+        const otherActiveAdmins = await prisma.user.count({
+          where: {
+            id: { not: id },
+            status: 'ACTIVE',
+            role: { name: 'ADMIN' },
+          },
+        });
+        if (otherActiveAdmins === 0) {
+          throw badRequest(
+            'Cannot deactivate the last active administrator',
+            'LAST_ADMIN_LOCKOUT_PROTECTION',
+          );
+        }
       }
+
+      const updated = await prisma.user.update({
+        where: { id },
+        data: { status },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          status: true,
+          role: { select: { id: true, name: true } },
+        },
+      });
+
+      if (status === 'INACTIVE') {
+        await authService.revokeAllUserSessions(id);
+      }
+
+      await auditService.log({
+        userId: req.user.id,
+        action: 'USER_STATUS_CHANGED',
+        entityType: 'User',
+        entityId: id,
+        metadata: {
+          targetUserId: id,
+          previousStatus: targetUser.status,
+          newStatus: status,
+        },
+        ip: req.ip,
+      });
+
+      res.status(200).json({ success: true, data: updated });
+    } catch (error) {
       next(error);
     }
   }
