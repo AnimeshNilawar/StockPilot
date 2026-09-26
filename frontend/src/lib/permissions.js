@@ -44,6 +44,12 @@ export const can = {
   createReceipt: (user) => hasPermission(user, 'receipt.create'),
   editReceipt: (user) => hasPermission(user, 'receipt.edit'),
   validateReceipt: (user) => hasPermission(user, 'receipt.validate'),
+  createDelivery: (user) => hasPermission(user, 'delivery.create'),
+  editDelivery: (user) => hasPermission(user, 'delivery.edit'),
+  // Picking is a separate action from editing because it is the step that takes
+  // the claim on real stock, so the UI shows it as its own decision.
+  pickDelivery: (user) => hasPermission(user, 'delivery.pick'),
+  validateDelivery: (user) => hasPermission(user, 'delivery.validate'),
 };
 
 /** The warehouse ids a user may filter by, or `null` when unrestricted. */

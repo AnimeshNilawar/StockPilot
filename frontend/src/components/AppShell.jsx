@@ -20,6 +20,11 @@ const NAV = [
     show: (user) => can.createReceipt(user) || can.validateReceipt(user),
   },
   {
+    to: '/deliveries',
+    label: 'Deliveries',
+    show: (user) => can.createDelivery(user) || can.pickDelivery(user) || can.validateDelivery(user),
+  },
+  {
     to: '/moves',
     label: 'Move history',
     show: (user) => can.readStock(user) || can.moveStock(user),

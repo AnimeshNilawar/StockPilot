@@ -6,16 +6,22 @@ import { can } from '../lib/permissions';
 import { AppShell, PageHeader, Card } from '../components/AppShell';
 import { DataTable, Badge } from '../components/DataTable';
 import { useToast } from '../components/Toast';
+import { formatQuantity, formatDate, formatDateTime, stateTone, errorMessage } from '../lib/format';
 
-export function ReceiptDetailPage() {
+const PICKABLE_STATES = ['DRAFT', 'WAITING'];
+const CANCELLABLE_STATES = ['DRAFT', 'WAITING', 'READY'];
+
+export function DeliveryDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { user } = useAuth();
   const toast = useToast();
 
-  const [receipt, setReceipt] = useState(null);
+  const [delivery, setDelivery] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [validating, setValidating] = useState(false);
+  const [busy, setBusy] = useState('');
+  const [availability, setAvailability] = useState(null);
+  const [checkingAvailability, setCheckingAvailability] = useState(false);
 
   // Edit modal state
   const [showEdit, setShowEdit] = useState(false);
@@ -28,36 +34,42 @@ export function ReceiptDetailPage() {
   const [products, setProducts] = useState([]);
   const [locations, setLocations] = useState([]);
 
-  const fetchReceipt = async () => {
+  const fetchDelivery = async () => {
     try {
-      const res = await api.get(`/receipts/${id}`);
-      setReceipt(res.data);
+      const res = await api.get(`/deliveries/${id}`);
+      setDelivery(res.data);
     } catch {
-      toast.error('Failed to load receipt');
-      navigate('/receipts');
+      toast.error('Failed to load delivery');
+      navigate('/deliveries');
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchReceipt();
+    fetchDelivery();
+  }, [id]);
+
+  // Availability is a snapshot of a moment, so it is dropped whenever the
+  // document changes rather than left behind to go stale.
+  useEffect(() => {
+    setAvailability(null);
   }, [id]);
 
   useEffect(() => {
     if (showEdit) {
       api.get('/warehouses').then((res) => setWarehouses(res.data.items || []));
-      api.get('/partners/options?type=SUPPLIER').then((res) => setPartners(res.data || []));
+      api.get('/partners/options?type=CUSTOMER').then((res) => setPartners(res.data || []));
       api.get('/products').then((res) => setProducts(res.data.items || []));
 
-      setEditPartnerId(receipt.partner.id);
-      setEditWarehouseId(receipt.warehouse.id);
+      setEditPartnerId(delivery.partner.id);
+      setEditWarehouseId(delivery.warehouse.id);
       setEditLines(
-        receipt.lines.map((l) => ({
+        delivery.lines.map((l) => ({
           id: crypto.randomUUID(),
           productId: l.product.id,
           quantity: l.quantity,
-          destinationLocationId: l.destinationLocation.id,
+          sourceLocationId: l.sourceLocation.id,
         })),
       );
     }
@@ -75,77 +87,124 @@ export function ReceiptDetailPage() {
     }
   }, [editWarehouseId]);
 
-  const handleValidate = async () => {
+  const handleCheckAvailability = async () => {
+    setCheckingAvailability(true);
+    try {
+      const res = await api.get(`/deliveries/${id}/availability`);
+      setAvailability(res.data);
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setCheckingAvailability(false);
+    }
+  };
+
+  const handlePick = async () => {
     if (
       !window.confirm(
-        'Are you sure you want to validate this receipt? This will move stock into the warehouse and cannot be undone.',
+        'Pick this delivery? The stock will be reserved against it, so no other delivery can be promised the same units.',
       )
     )
       return;
-    setValidating(true);
+    setBusy('pick');
+    try {
+      await api.post(`/deliveries/${id}/pick`);
+      toast.success('Delivery picked and stock reserved');
+      setAvailability(null);
+      await fetchDelivery();
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const handleValidate = async () => {
+    if (
+      !window.confirm(
+        'Are you sure you want to validate this delivery? The stock will leave the warehouse and this cannot be undone.',
+      )
+    )
+      return;
+    setBusy('validate');
     try {
       const key = crypto.randomUUID();
-      await api.post(`/receipts/${id}/validate`, {}, { headers: { 'Idempotency-Key': key } });
-      toast.success('Receipt validated successfully');
-      fetchReceipt();
+      await api.post(`/deliveries/${id}/validate`, {}, { headers: { 'Idempotency-Key': key } });
+      toast.success('Delivery validated successfully');
+      setAvailability(null);
+      await fetchDelivery();
     } catch (err) {
-      toast.error(err.message);
+      toast.error(errorMessage(err));
     } finally {
-      setValidating(false);
+      setBusy('');
     }
   };
 
   const handleTransition = async (newState) => {
+    setBusy(newState);
     try {
-      await api.patch(`/receipts/${id}/status`, { state: newState });
-      toast.success(`Receipt moved to ${newState}`);
-      fetchReceipt();
+      await api.patch(`/deliveries/${id}/status`, { state: newState });
+      toast.success(`Delivery moved to ${newState}`);
+      await fetchDelivery();
     } catch (err) {
-      toast.error(err.message);
+      toast.error(errorMessage(err));
+    } finally {
+      setBusy('');
     }
   };
 
   const handleCancel = async () => {
-    if (!window.confirm('Are you sure you want to cancel this receipt?')) return;
+    const releases =
+      delivery.state === 'READY'
+        ? ' Its stock reservation will be released, returning the units to free stock.'
+        : '';
+    if (!window.confirm(`Are you sure you want to cancel this delivery?${releases}`)) return;
+    setBusy('cancel');
     try {
-      await api.post(`/receipts/${id}/cancel`);
-      toast.success('Receipt cancelled');
-      fetchReceipt();
+      await api.post(`/deliveries/${id}/cancel`);
+      toast.success('Delivery cancelled');
+      setAvailability(null);
+      await fetchDelivery();
     } catch (err) {
-      toast.error(err.message);
+      toast.error(errorMessage(err));
+    } finally {
+      setBusy('');
     }
   };
 
   const handleSaveEdit = async (e) => {
     e.preventDefault();
+    setBusy('edit');
     try {
-      await api.put(`/receipts/${id}`, {
+      await api.put(`/deliveries/${id}`, {
         partnerId: editPartnerId,
         warehouseId: editWarehouseId,
         lines: editLines.map((l) => ({
           productId: l.productId,
           quantity: l.quantity,
-          destinationLocationId: l.destinationLocationId,
+          sourceLocationId: l.sourceLocationId,
         })),
       });
-      toast.success('Receipt updated');
+      toast.success('Delivery updated');
       setShowEdit(false);
-      fetchReceipt();
+      await fetchDelivery();
     } catch (err) {
-      toast.error(err.message);
+      toast.error(errorMessage(err));
+    } finally {
+      setBusy('');
     }
   };
 
   const addLine = () => {
     setEditLines([
       ...editLines,
-      { id: crypto.randomUUID(), productId: '', quantity: '', destinationLocationId: '' },
+      { id: crypto.randomUUID(), productId: '', quantity: '', sourceLocationId: '' },
     ]);
   };
 
   const handleWarehouseChange = (e) => {
     setEditWarehouseId(e.target.value);
-    setEditLines(editLines.map((l) => ({ ...l, destinationLocationId: '' })));
+    setEditLines(editLines.map((l) => ({ ...l, sourceLocationId: '' })));
   };
 
   const removeLine = (lineId) => {
@@ -159,12 +218,12 @@ export function ReceiptDetailPage() {
   if (loading) {
     return (
       <AppShell>
-        <div className="py-12 text-center text-slate-500">Loading receipt...</div>
+        <div className="py-12 text-center text-slate-500">Loading delivery...</div>
       </AppShell>
     );
   }
 
-  if (!receipt) return null;
+  if (!delivery) return null;
 
   const columns = [
     {
@@ -175,9 +234,9 @@ export function ReceiptDetailPage() {
     {
       key: 'quantity',
       header: 'Quantity',
-      render: (row) => `${Number(row.quantity)} ${row.product.uom.code}`,
+      render: (row) => `${formatQuantity(row.quantity)} ${row.product.uom.code}`,
     },
-    { key: 'destination', header: 'Destination', render: (row) => row.destinationLocation.name },
+    { key: 'source', header: 'Ship From', render: (row) => row.sourceLocation.name },
   ];
 
   return (
@@ -187,11 +246,11 @@ export function ReceiptDetailPage() {
         body * {
           visibility: hidden;
         }
-        .receipt-print-document,
-        .receipt-print-document * {
+        .delivery-print-document,
+        .delivery-print-document * {
           visibility: visible;
         }
-        .receipt-print-document {
+        .delivery-print-document {
           display: block !important;
           position: absolute;
           left: 0;
@@ -208,17 +267,28 @@ export function ReceiptDetailPage() {
     `}</style>
       <AppShell>
         <PageHeader
-          title={receipt.reference}
-          description={`Partner: ${receipt.partner?.name || '-'} • Warehouse: ${receipt.warehouse.name}`}
+          title={delivery.reference}
+          description={`Customer: ${delivery.partner?.name || '-'} • Warehouse: ${delivery.warehouse.name}`}
           actions={
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <button
                 onClick={() => window.print()}
                 className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
               >
                 Print
               </button>
-              {receipt.state === 'DRAFT' && can.editReceipt(user) && (
+
+              {PICKABLE_STATES.includes(delivery.state) && (
+                <button
+                  onClick={handleCheckAvailability}
+                  disabled={checkingAvailability}
+                  className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {checkingAvailability ? 'Checking...' : 'Check availability'}
+                </button>
+              )}
+
+              {delivery.state === 'DRAFT' && can.editDelivery(user) && (
                 <button
                   onClick={() => setShowEdit(true)}
                   className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
@@ -226,35 +296,42 @@ export function ReceiptDetailPage() {
                   Edit
                 </button>
               )}
-              {receipt.state === 'DRAFT' && can.editReceipt(user) && (
+
+              {delivery.state === 'DRAFT' && can.editDelivery(user) && (
                 <button
                   onClick={() => handleTransition('WAITING')}
-                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                  disabled={busy === 'WAITING'}
+                  className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                 >
                   Submit (Waiting)
                 </button>
               )}
-              {receipt.state === 'WAITING' && can.editReceipt(user) && (
+
+              {PICKABLE_STATES.includes(delivery.state) && can.pickDelivery(user) && (
                 <button
-                  onClick={() => handleTransition('READY')}
-                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                  onClick={handlePick}
+                  disabled={busy === 'pick'}
+                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
                 >
-                  Mark Ready
+                  {busy === 'pick' ? 'Picking...' : 'Pick & Reserve'}
                 </button>
               )}
-              {receipt.state === 'READY' && can.validateReceipt(user) && (
+
+              {delivery.state === 'READY' && can.validateDelivery(user) && (
                 <button
                   onClick={handleValidate}
-                  disabled={validating}
+                  disabled={busy === 'validate'}
                   className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
                 >
-                  {validating ? 'Validating...' : 'Validate Receipt'}
+                  {busy === 'validate' ? 'Validating...' : 'Validate Delivery'}
                 </button>
               )}
-              {['DRAFT', 'WAITING', 'READY'].includes(receipt.state) && can.editReceipt(user) && (
+
+              {CANCELLABLE_STATES.includes(delivery.state) && can.editDelivery(user) && (
                 <button
                   onClick={handleCancel}
-                  className="rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
+                  disabled={busy === 'cancel'}
+                  className="rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
                 >
                   Cancel
                 </button>
@@ -268,37 +345,95 @@ export function ReceiptDetailPage() {
             <div>
               <h3 className="text-sm font-medium text-slate-500">Status</h3>
               <p className="mt-1">
-                <Badge
-                  className={
-                    receipt.state === 'DONE'
-                      ? 'bg-green-100 text-green-700'
-                      : receipt.state === 'CANCELLED'
-                        ? 'bg-red-100 text-red-700'
-                        : ['WAITING', 'READY'].includes(receipt.state)
-                          ? 'bg-yellow-100 text-yellow-700'
-                          : 'bg-blue-100 text-blue-700'
-                  }
-                >
-                  {receipt.state}
-                </Badge>
+                <Badge className={stateTone(delivery.state)}>{delivery.state}</Badge>
               </p>
             </div>
             <div>
               <h3 className="text-sm font-medium text-slate-500">Created</h3>
-              <p className="mt-1 text-sm text-slate-900">
-                {new Date(receipt.createdAt).toLocaleString()}
+              <p className="mt-1 text-sm text-slate-900">{formatDateTime(delivery.createdAt)}</p>
+            </div>
+            <div className="sm:col-span-2">
+              <h3 className="text-sm font-medium text-slate-500">Next step</h3>
+              <p className="mt-1 text-sm text-slate-600">
+                {PICKABLE_STATES.includes(delivery.state) &&
+                  'Pick the delivery to reserve the stock it needs. Nothing is deducted until it is validated.'}
+                {delivery.state === 'READY' &&
+                  'Stock is reserved against this delivery. Validating ships the goods and consumes the reservation; cancelling returns it.'}
+                {delivery.state === 'DONE' && 'Goods have shipped. This delivery is closed.'}
+                {delivery.state === 'CANCELLED' && 'This delivery was cancelled. Any reservation has been released.'}
               </p>
             </div>
           </div>
         </Card>
 
+        {availability && (
+          <Card className="mb-6">
+            <div className="border-b border-slate-200 px-6 py-4">
+              <h2 className="text-lg font-bold text-slate-800">Stock availability</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Free to use is on-hand minus everything already reserved. {availability.isPicked
+                  ? 'This delivery is picked, so it already holds the reservation for its own lines.'
+                  : 'A line must fit inside free-to-use to be picked.'}
+              </p>
+            </div>
+            <div className="px-6 py-4">
+              {availability.canPick ? (
+                <p className="mb-4 rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+                  Every line can be picked.
+                </p>
+              ) : (
+                <p className="mb-4 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  At least one line cannot be picked — the stock is either short or already reserved
+                  by another delivery.
+                </p>
+              )}
+              <DataTable
+                columns={[
+                  {
+                    key: 'product',
+                    header: 'Product',
+                    render: (row) => {
+                      const line = delivery.lines.find((l) => l.id === row.lineId);
+                      return line ? `${line.product.name} (${line.product.sku})` : row.productId;
+                    },
+                  },
+                  { key: 'qty', header: 'Required', render: (row) => formatQuantity(row.quantity) },
+                  { key: 'onHand', header: 'On hand', render: (row) => formatQuantity(row.onHand) },
+                  {
+                    key: 'reserved',
+                    header: 'Reserved',
+                    render: (row) => formatQuantity(row.reservedQuantity),
+                  },
+                  {
+                    key: 'free',
+                    header: 'Free to use',
+                    render: (row) => formatQuantity(row.freeToUse),
+                  },
+                  {
+                    key: 'ok',
+                    header: '',
+                    render: (row) =>
+                      row.isAvailable ? (
+                        <Badge className="bg-emerald-100 text-emerald-800">Available</Badge>
+                      ) : (
+                        <Badge className="bg-rose-100 text-rose-700">Short</Badge>
+                      ),
+                  },
+                ]}
+                rows={availability.lines}
+                getRowKey={(row) => row.lineId}
+              />
+            </div>
+          </Card>
+        )}
+
         <Card>
           <div className="border-b border-slate-200 px-6 py-4">
-            <h2 className="text-lg font-bold text-slate-800">Receipt Lines</h2>
+            <h2 className="text-lg font-bold text-slate-800">Delivery Lines</h2>
           </div>
           <DataTable
             columns={columns}
-            rows={receipt.lines}
+            rows={delivery.lines}
             getRowKey={(row) => row.id}
             empty={<p className="py-12 text-center text-sm text-slate-500">No lines found.</p>}
           />
@@ -307,18 +442,18 @@ export function ReceiptDetailPage() {
         {showEdit && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
             <div className="w-full max-w-2xl rounded-xl bg-white p-6 shadow-xl max-h-[90vh] overflow-y-auto">
-              <h2 className="mb-4 text-xl font-bold">Edit Draft Receipt</h2>
+              <h2 className="mb-4 text-xl font-bold">Edit Draft Delivery</h2>
               <form onSubmit={handleSaveEdit} className="flex flex-col gap-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="mb-1 block text-sm font-medium text-slate-700">Partner</label>
+                    <label className="mb-1 block text-sm font-medium text-slate-700">Customer</label>
                     <select
                       required
                       value={editPartnerId}
                       onChange={(e) => setEditPartnerId(e.target.value)}
                       className="w-full rounded-lg border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
                     >
-                      <option value="">Select a partner...</option>
+                      <option value="">Select a customer...</option>
                       {partners.map((p) => (
                         <option key={p.id} value={p.id}>
                           {p.name}
@@ -380,7 +515,7 @@ export function ReceiptDetailPage() {
                             <option value="">Select product...</option>
                             {products.map((p) => (
                               <option key={p.id} value={p.id}>
-                                {p.name}
+                                {p.name} ({p.sku})
                               </option>
                             ))}
                           </select>
@@ -400,13 +535,11 @@ export function ReceiptDetailPage() {
                         <div className="flex-1">
                           <select
                             required
-                            value={line.destinationLocationId}
-                            onChange={(e) =>
-                              updateLine(line.id, 'destinationLocationId', e.target.value)
-                            }
+                            value={line.sourceLocationId}
+                            onChange={(e) => updateLine(line.id, 'sourceLocationId', e.target.value)}
                             className="w-full text-sm rounded border-slate-300 py-1"
                           >
-                            <option value="">Select location...</option>
+                            <option value="">Ship from...</option>
                             {locations.map((l) => (
                               <option key={l.id} value={l.id}>
                                 {l.name}
@@ -436,7 +569,8 @@ export function ReceiptDetailPage() {
                   </button>
                   <button
                     type="submit"
-                    className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                    disabled={busy === 'edit'}
+                    className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
                   >
                     Save Changes
                   </button>
@@ -447,52 +581,46 @@ export function ReceiptDetailPage() {
         )}
       </AppShell>
 
-      <div className="receipt-print-document hidden font-sans text-black bg-white">
+      <div className="delivery-print-document hidden font-sans text-black bg-white">
         <div className="border-b-2 border-slate-900 pb-4 mb-8">
           <h1 className="text-3xl font-bold uppercase tracking-wider">StockPilot</h1>
           <h2 className="text-xl font-semibold text-slate-700 uppercase tracking-widest mt-1">
-            Goods Receipt
+            Delivery Note
           </h2>
         </div>
 
         <div className="mb-8">
           <h3 className="text-lg font-bold border-b border-slate-300 pb-2 mb-4">
-            Receipt Information
+            Delivery Information
           </h3>
           <table className="w-full max-w-lg text-sm">
             <tbody>
               <tr>
-                <td className="py-1 font-semibold w-32">Receipt No.</td>
-                <td className="py-1">{receipt.reference}</td>
+                <td className="py-1 font-semibold w-32">Delivery No.</td>
+                <td className="py-1">{delivery.reference}</td>
               </tr>
               <tr>
                 <td className="py-1 font-semibold w-32">Status</td>
-                <td className="py-1">{receipt.state}</td>
+                <td className="py-1">{delivery.state}</td>
               </tr>
               <tr>
                 <td className="py-1 font-semibold w-32">Date</td>
-                <td className="py-1">
-                  {new Date(receipt.createdAt).toLocaleDateString('en-GB', {
-                    day: '2-digit',
-                    month: 'short',
-                    year: 'numeric',
-                  })}
-                </td>
+                <td className="py-1">{formatDate(delivery.createdAt)}</td>
               </tr>
               <tr>
-                <td className="py-1 font-semibold w-32">Partner</td>
-                <td className="py-1">{receipt.partner?.name || '-'}</td>
+                <td className="py-1 font-semibold w-32">Customer</td>
+                <td className="py-1">{delivery.partner?.name || '-'}</td>
               </tr>
               <tr>
                 <td className="py-1 font-semibold w-32">Warehouse</td>
-                <td className="py-1">{receipt.warehouse.name}</td>
+                <td className="py-1">{delivery.warehouse.name}</td>
               </tr>
             </tbody>
           </table>
         </div>
 
         <div className="mb-8">
-          <h3 className="text-lg font-bold border-b border-slate-300 pb-2 mb-4">Receipt Lines</h3>
+          <h3 className="text-lg font-bold border-b border-slate-300 pb-2 mb-4">Delivery Lines</h3>
           <table className="w-full text-left border-collapse text-sm">
             <thead className="table-header-group">
               <tr className="border-b-2 border-slate-900">
@@ -500,19 +628,19 @@ export function ReceiptDetailPage() {
                 <th className="py-2 px-2 font-bold">Product</th>
                 <th className="py-2 px-2 font-bold">SKU</th>
                 <th className="py-2 px-2 font-bold text-right">Quantity</th>
-                <th className="py-2 px-2 font-bold text-right">Destination</th>
+                <th className="py-2 px-2 font-bold text-right">Ship From</th>
               </tr>
             </thead>
             <tbody>
-              {receipt.lines.map((l, i) => (
+              {delivery.lines.map((l, i) => (
                 <tr key={l.id} className="border-b border-slate-300 break-inside-avoid">
                   <td className="py-3 px-2">{i + 1}</td>
                   <td className="py-3 px-2">{l.product.name}</td>
                   <td className="py-3 px-2">{l.product.sku}</td>
                   <td className="py-3 px-2 text-right">
-                    {Number(l.quantity)} {l.product.uom.code}
+                    {formatQuantity(l.quantity)} {l.product.uom.code}
                   </td>
-                  <td className="py-3 px-2 text-right">{l.destinationLocation.name}</td>
+                  <td className="py-3 px-2 text-right">{l.sourceLocation.name}</td>
                 </tr>
               ))}
             </tbody>
@@ -521,18 +649,18 @@ export function ReceiptDetailPage() {
 
         <div className="mb-16">
           <h3 className="text-lg font-bold border-b border-slate-300 pb-2 mb-4">Summary</h3>
-          <p className="text-sm">Total Lines: {receipt.lines.length}</p>
+          <p className="text-sm">Total Lines: {delivery.lines.length}</p>
         </div>
 
         <div className="flex justify-between border-t border-slate-900 pt-16 break-inside-avoid">
           <div className="w-64">
-            <p className="mb-8 font-semibold">Received By</p>
+            <p className="mb-8 font-semibold">Picked By</p>
             <div className="border-b border-slate-900 mb-2"></div>
             <p className="text-xs text-slate-600 mb-4">Name / Signature</p>
             <p className="text-xs text-slate-600">Date: ________________</p>
           </div>
           <div className="w-64">
-            <p className="mb-8 font-semibold">Authorized By</p>
+            <p className="mb-8 font-semibold">Received By</p>
             <div className="border-b border-slate-900 mb-2"></div>
             <p className="text-xs text-slate-600 mb-4">Name / Signature</p>
             <p className="text-xs text-slate-600">Date: ________________</p>
@@ -540,7 +668,7 @@ export function ReceiptDetailPage() {
         </div>
 
         <div className="mt-16 text-center text-xs text-slate-500 pt-4 pb-4 print-footer">
-          StockPilot • Goods Receipt • {receipt.reference}
+          StockPilot • Delivery Note • {delivery.reference}
         </div>
       </div>
     </>

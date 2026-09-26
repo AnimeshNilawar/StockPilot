@@ -8,9 +8,9 @@ import { DataTable, Badge } from '../components/DataTable';
 import { Pagination } from '../components/Pagination';
 import { useToast } from '../components/Toast';
 
-export function ReceiptsPage() {
+export function DeliveriesPage() {
   const { user } = useAuth();
-  const [receipts, setReceipts] = useState([]);
+  const [deliveries, setDeliveries] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [pageSize] = useState(20);
@@ -29,7 +29,7 @@ export function ReceiptsPage() {
   const [partnerId, setPartnerId] = useState('');
   const [warehouseId, setWarehouseId] = useState('');
   const [lines, setLines] = useState([
-    { id: crypto.randomUUID(), productId: '', quantity: '', destinationLocationId: '' },
+    { id: crypto.randomUUID(), productId: '', quantity: '', sourceLocationId: '' },
   ]);
 
   const [warehouses, setWarehouses] = useState([]);
@@ -44,7 +44,7 @@ export function ReceiptsPage() {
     return () => clearTimeout(timer);
   }, [search]);
 
-  const fetchReceipts = async () => {
+  const fetchDeliveries = async () => {
     setLoading(true);
     try {
       const query = new URLSearchParams({ page, pageSize });
@@ -52,18 +52,18 @@ export function ReceiptsPage() {
       if (statusFilter) query.append('state', statusFilter);
       if (warehouseFilter) query.append('warehouseId', warehouseFilter);
 
-      const res = await api.get(`/receipts?${query.toString()}`);
-      setReceipts(res.data.items);
+      const res = await api.get(`/deliveries?${query.toString()}`);
+      setDeliveries(res.data.items);
       setTotal(res.data.pagination.total);
     } catch {
-      toast.error('Failed to load receipts');
+      toast.error('Failed to load deliveries');
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchReceipts();
+    fetchDeliveries();
   }, [page, debouncedSearch, statusFilter, warehouseFilter]);
 
   // Reset page when filters change
@@ -78,14 +78,17 @@ export function ReceiptsPage() {
   useEffect(() => {
     if (showCreate) {
       api.get('/products').then((res) => setProducts(res.data.items || []));
-      api.get('/partners/options?type=SUPPLIER').then((res) => setPartners(res.data || []));
+      // A delivery ships *to* someone, so only partners allowed to buy appear.
+      // The endpoint widens CUSTOMER to include BOTH.
+      api.get('/partners/options?type=CUSTOMER').then((res) => setPartners(res.data || []));
     }
   }, [showCreate]);
 
   useEffect(() => {
     if (warehouseId) {
       api.get(`/warehouses/${warehouseId}/locations?pageSize=200`).then((res) => {
-        // Only allow internal/holding locations for receipt destination
+        // Stock only ever leaves a location that holds a balance, so the boundary
+        // nodes are excluded here as well as on the server.
         setLocations(
           res.data.items.filter((loc) => loc.type !== 'VENDOR' && loc.type !== 'CUSTOMER'),
         );
@@ -97,13 +100,13 @@ export function ReceiptsPage() {
 
   const handleWarehouseChange = (e) => {
     setWarehouseId(e.target.value);
-    setLines(lines.map((l) => ({ ...l, destinationLocationId: '' })));
+    setLines(lines.map((l) => ({ ...l, sourceLocationId: '' })));
   };
 
   const addLine = () => {
     setLines([
       ...lines,
-      { id: crypto.randomUUID(), productId: '', quantity: '', destinationLocationId: '' },
+      { id: crypto.randomUUID(), productId: '', quantity: '', sourceLocationId: '' },
     ]);
   };
 
@@ -124,23 +127,21 @@ export function ReceiptsPage() {
     }
     setSubmitting(true);
     try {
-      const res = await api.post('/receipts', {
+      const res = await api.post('/deliveries', {
         partnerId,
         warehouseId,
         lines: lines.map((l) => ({
           productId: l.productId,
           quantity: l.quantity,
-          destinationLocationId: l.destinationLocationId,
+          sourceLocationId: l.sourceLocationId,
         })),
       });
-      toast.success('Draft receipt created');
+      toast.success('Draft delivery created');
       setShowCreate(false);
       setPartnerId('');
       setWarehouseId('');
-      setLines([
-        { id: crypto.randomUUID(), productId: '', quantity: '', destinationLocationId: '' },
-      ]);
-      navigate(`/receipts/${res.data.id}`);
+      setLines([{ id: crypto.randomUUID(), productId: '', quantity: '', sourceLocationId: '' }]);
+      navigate(`/deliveries/${res.data.id}`);
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -153,13 +154,18 @@ export function ReceiptsPage() {
       key: 'reference',
       header: 'Reference',
       render: (row) => (
-        <Link to={`/receipts/${row.id}`} className="font-medium text-blue-600 hover:underline">
+        <Link to={`/deliveries/${row.id}`} className="font-medium text-blue-600 hover:underline">
           {row.reference}
         </Link>
       ),
     },
-    { key: 'partner', header: 'Partner', render: (row) => row.partner?.name || '-' },
+    { key: 'partner', header: 'Customer', render: (row) => row.partner?.name || '-' },
     { key: 'warehouse', header: 'Warehouse', render: (row) => row.warehouse.name },
+    {
+      key: 'lines',
+      header: 'Lines',
+      render: (row) => row.lines.length,
+    },
     {
       key: 'state',
       header: 'Status',
@@ -184,15 +190,15 @@ export function ReceiptsPage() {
   return (
     <AppShell>
       <PageHeader
-        title="Receipts"
-        description="Manage incoming goods from vendors."
+        title="Deliveries"
+        description="Manage outgoing goods to customers. Stock is reserved when a delivery is picked."
         actions={
-          can.createReceipt(user) && (
+          can.createDelivery(user) && (
             <button
               onClick={() => setShowCreate(true)}
               className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
             >
-              New Receipt
+              New Delivery
             </button>
           )
         }
@@ -202,7 +208,7 @@ export function ReceiptsPage() {
         <div className="flex flex-col gap-4 sm:flex-row">
           <input
             type="text"
-            placeholder="Search by reference or partner..."
+            placeholder="Search by reference or customer..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="flex-1 rounded-lg border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
@@ -240,9 +246,9 @@ export function ReceiptsPage() {
         ) : (
           <DataTable
             columns={columns}
-            rows={receipts}
+            rows={deliveries}
             getRowKey={(row) => row.id}
-            empty={<p className="py-12 text-center text-sm text-slate-500">No receipts found.</p>}
+            empty={<p className="py-12 text-center text-sm text-slate-500">No deliveries found.</p>}
           />
         )}
         {total > 0 && (
@@ -260,17 +266,17 @@ export function ReceiptsPage() {
       {showCreate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
           <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl max-h-[90vh] overflow-y-auto">
-            <h2 className="mb-4 text-xl font-bold">New Draft Receipt</h2>
+            <h2 className="mb-4 text-xl font-bold">New Draft Delivery</h2>
             <form onSubmit={handleCreate} className="flex flex-col gap-4">
               <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">Partner</label>
+                <label className="mb-1 block text-sm font-medium text-slate-700">Customer</label>
                 <select
                   required
                   value={partnerId}
                   onChange={(e) => setPartnerId(e.target.value)}
                   className="w-full rounded-lg border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
                 >
-                  <option value="">Select a partner...</option>
+                  <option value="">Select a customer...</option>
                   {partners.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.name}
@@ -348,13 +354,11 @@ export function ReceiptsPage() {
                       <div className="flex-1">
                         <select
                           required
-                          value={line.destinationLocationId}
-                          onChange={(e) =>
-                            updateLine(line.id, 'destinationLocationId', e.target.value)
-                          }
+                          value={line.sourceLocationId}
+                          onChange={(e) => updateLine(line.id, 'sourceLocationId', e.target.value)}
                           className="w-full text-sm rounded border-slate-300 py-1"
                         >
-                          <option value="">Select location...</option>
+                          <option value="">Ship from...</option>
                           {locations.map((l) => (
                             <option key={l.id} value={l.id}>
                               {l.name}

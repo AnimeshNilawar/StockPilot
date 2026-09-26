@@ -13,6 +13,8 @@ import { StockBalancesPage } from './pages/StockBalancesPage';
 import { MoveHistoryPage } from './pages/MoveHistoryPage';
 import { ReceiptsPage } from './pages/ReceiptsPage';
 import { ReceiptDetailPage } from './pages/ReceiptDetailPage';
+import { DeliveriesPage } from './pages/DeliveriesPage';
+import { DeliveryDetailPage } from './pages/DeliveryDetailPage';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastProvider } from './components/Toast';
@@ -42,6 +44,8 @@ function App() {
               <Route path="/moves" element={<MoveHistoryPage />} />
               <Route path="/receipts" element={<ReceiptsPage />} />
               <Route path="/receipts/:id" element={<ReceiptDetailPage />} />
+              <Route path="/deliveries" element={<DeliveriesPage />} />
+              <Route path="/deliveries/:id" element={<DeliveryDetailPage />} />
             </Route>
           </Routes>
         </BrowserRouter>
