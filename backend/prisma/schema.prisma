@@ -36,7 +36,7 @@ model Permission {
   id          String           @id @default(uuid())
   action      String           @unique
   roles       RolePermission[]
-  createdAt   DateTime         @default(now())
+  createdAt   DateTime @default(now())
 }
 
 model RolePermission {
@@ -51,6 +51,10 @@ model RolePermission {
 model Warehouse {
   id          String                @id @default(uuid())
   name        String
+  shortCode   String                @unique @map("short_code")
+  address     String?
+  isActive    Boolean               @default(true) @map("is_active")
+  locations   Location[]
   userAccess  UserWarehouseAccess[]
   createdAt   DateTime              @default(now())
   updatedAt   DateTime              @updatedAt
@@ -104,4 +108,142 @@ model AuditLog {
   ip         String?
   userAgent  String?
   createdAt  DateTime @default(now())
+}
+
+// ---------- Catalog ----------
+
+model Category {
+  id        String     @id @default(uuid())
+  name      String     @unique
+  parentId  String?    @map("parent_id")
+  parent    Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children  Category[] @relation("CategoryTree")
+  products  Product[]
+  isActive  Boolean    @default(true) @map("is_active")
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
+
+  @@index([parentId])
+  @@map("categories")
+}
+
+model Uom {
+  id        String    @id @default(uuid())
+  name      String
+  code      String    @unique
+  isActive  Boolean   @default(true) @map("is_active")
+  products  Product[]
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  @@map("uom")
+}
+
+model Product {
+  id          String     @id @default(uuid())
+  sku         String     @unique
+  name        String
+  description String?
+  categoryId  String?    @map("category_id")
+  category    Category?  @relation(fields: [categoryId], references: [id])
+  uomId       String     @map("uom_id")
+  uom         Uom        @relation(fields: [uomId], references: [id])
+  // All quantities use NUMERIC/Decimal — never JavaScript floating point.
+  costPrice   Decimal    @default(0) @map("cost_price") @db.Decimal(14, 2)
+  reorderMin  Decimal    @default(0) @map("reorder_min") @db.Decimal(14, 4)
+  reorderMax  Decimal?   @map("reorder_max") @db.Decimal(14, 4)
+  isActive    Boolean    @default(true) @map("is_active")
+  quants      StockQuant[]
+  moves       StockMove[]
+  createdAt   DateTime   @default(now()) @map("created_at")
+  updatedAt   DateTime   @updatedAt @map("updated_at")
+
+  @@index([categoryId])
+  @@index([uomId])
+  @@map("products")
+}
+
+// ---------- Warehouse Locations ----------
+
+model Location {
+  id          String        @id @default(uuid())
+  warehouseId String        @map("warehouse_id")
+  warehouse   Warehouse     @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  parentId    String?       @map("parent_id")
+  parent      Location?     @relation("LocationTree", fields: [parentId], references: [id])
+  children    Location[]    @relation("LocationTree")
+  name        String
+  shortCode   String        @map("short_code")
+  // INTERNAL | VENDOR | CUSTOMER | PRODUCTION | SCRAP | TRANSIT
+  type        String        @default("INTERNAL")
+  isActive    Boolean       @default(true) @map("is_active")
+  quantsHere  StockQuant[]
+  movesFrom   StockMove[]   @relation("MoveFrom")
+  movesTo     StockMove[]   @relation("MoveTo")
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  @@unique([warehouseId, shortCode])
+  @@index([warehouseId, type])
+  @@index([parentId])
+  @@map("locations")
+}
+
+// ---------- Inventory (Ledger + Quants) ----------
+
+model StockMove {
+  id               String   @id @default(uuid())
+  reference        String
+  productId        String   @map("product_id")
+  product          Product  @relation(fields: [productId], references: [id])
+  fromLocationId   String   @map("from_location_id")
+  fromLocation     Location @relation("MoveFrom", fields: [fromLocationId], references: [id])
+  toLocationId     String   @map("to_location_id")
+  toLocation       Location @relation("MoveTo", fields: [toLocationId], references: [id])
+  quantity         Decimal  @db.Decimal(14, 4)
+  // Same vocabulary as domain/documentState.js and domain/documentType.js; the
+  // database CHECK constraints reject anything else.
+  state            String   @default("DRAFT") // DRAFT|WAITING|READY|DONE|CANCELLED
+  documentType     String   @map("document_type") // RECEIPT|DELIVERY|INTERNAL|ADJUSTMENT
+  documentId       String   @map("document_id")
+  scheduledDate    DateTime? @map("scheduled_date")
+  doneDate         DateTime? @map("done_date")
+  createdById      String?  @map("created_by")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@index([productId, state])
+  @@index([documentType, documentId])
+  @@index([fromLocationId, toLocationId, doneDate])
+  @@map("stock_moves")
+}
+
+model StockQuant {
+  productId        String   @map("product_id")
+  product          Product  @relation(fields: [productId], references: [id])
+  locationId       String   @map("location_id")
+  location         Location @relation(fields: [locationId], references: [id])
+  onHand           Decimal  @default(0) @map("on_hand") @db.Decimal(14, 4)
+  reservedQuantity Decimal  @default(0) @map("reserved_quantity") @db.Decimal(14, 4)
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@id([productId, locationId])
+  @@index([locationId])
+  @@map("stock_quants")
+}
+
+model IdempotencyKey {
+  id            String   @id @default(uuid())
+  key           String   @unique
+  userId        String?  @map("user_id")
+  endpoint      String
+  requestHash   String   @map("request_hash")
+  responseBody  Json     @map("response_body")
+  statusCode    Int      @map("status_code")
+  expiresAt     DateTime @map("expires_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@index([expiresAt])
+  @@map("idempotency_keys")
 }
