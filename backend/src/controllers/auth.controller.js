@@ -310,7 +310,7 @@ class AuthController {
           await emailService.sendPasswordResetOtp({
             to: email,
             otp,
-            expiresInMinutes
+            expiresInMinutes,
           });
         } catch (deliveryError) {
           // If delivery fails, safely invalidate/delete the OTP reset record so the user can try again
@@ -330,11 +330,15 @@ class AuthController {
           .status(400)
           .json({ success: false, message: 'Validation failed', code: 'VALIDATION_ERROR' });
       }
-      
+
       // Do not leak SMTP or internal errors to client in production
       // Actually we just return generic error for anything else here as per req
       if (error.message === 'Email delivery failed') {
-         return res.status(500).json({ success: false, message: 'Unable to process request at this time', code: 'SERVER_ERROR' });
+        return res.status(500).json({
+          success: false,
+          message: 'Unable to process request at this time',
+          code: 'SERVER_ERROR',
+        });
       }
 
       next(error);

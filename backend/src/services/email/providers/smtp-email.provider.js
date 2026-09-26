@@ -4,7 +4,9 @@ const { env } = require('../../../config/env');
 class SmtpEmailProvider {
   constructor() {
     if (!env.SMTP_USER || !env.SMTP_PASSWORD) {
-      throw new Error('SMTP configuration is missing (SMTP_USER or SMTP_PASSWORD). Please check your environment variables.');
+      throw new Error(
+        'SMTP configuration is missing (SMTP_USER or SMTP_PASSWORD). Please check your environment variables.',
+      );
     }
 
     this.transporter = nodemailer.createTransport({

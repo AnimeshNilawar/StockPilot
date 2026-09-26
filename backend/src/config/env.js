@@ -15,7 +15,10 @@ const envSchema = z.object({
   OTP_DELIVERY_MODE: z.enum(['console', 'smtp']).default('console'),
   SMTP_HOST: z.string().default('smtp.gmail.com'),
   SMTP_PORT: z.string().transform(Number).default('587'),
-  SMTP_SECURE: z.string().transform((val) => val === 'true').default('false'),
+  SMTP_SECURE: z
+    .string()
+    .transform((val) => val === 'true')
+    .default('false'),
   SMTP_USER: z.string().optional(),
   SMTP_PASSWORD: z.string().optional(),
   SMTP_FROM: z.string().optional(),
