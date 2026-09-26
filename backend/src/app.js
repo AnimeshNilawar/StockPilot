@@ -1,0 +1,36 @@
+const express = require('express');
+const cors = require('cors');
+const morgan = require('morgan');
+const cookieParser = require('cookie-parser');
+const routes = require('./routes');
+const errorHandler = require('./middleware/errorHandler');
+const { env } = require('./config/env');
+
+const app = express();
+
+app.use(express.json());
+app.use(cookieParser());
+app.use(
+  cors({
+    origin: env.FRONTEND_URL,
+    credentials: true,
+  }),
+);
+
+if (env.NODE_ENV !== 'test') {
+  app.use(morgan('dev'));
+}
+
+app.use('/api/v1', routes);
+
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: 'Route not found',
+    code: 'NOT_FOUND',
+  });
+});
+
+app.use(errorHandler);
+
+module.exports = app;
