@@ -103,3 +103,9 @@ export const errorMessage = (error) => {
   }
   return error.message || 'Something went wrong';
 };
+
+/** Field-level validation errors, keyed by field name, from an API rejection. */
+export const fieldErrors = (error) => {
+  if (!Array.isArray(error?.data?.errors)) return {};
+  return error.data.errors.reduce((acc, field) => ({ ...acc, [field.path]: field.message }), {});
+};

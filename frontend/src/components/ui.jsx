@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Spinner } from './States';
+export { fieldErrors } from '../lib/format';
 
 /**
  * Modal dialog. Closes on Escape and on backdrop click, restores focus to the
@@ -8,13 +9,15 @@ import { Spinner } from './States';
 export function Modal({ open, title, onClose, children, footer, size = 'md' }) {
   const panel = useRef(null);
   const previouslyFocused = useRef(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!open) return undefined;
 
     previouslyFocused.current = document.activeElement;
     const onKeyDown = (event) => {
-      if (event.key === 'Escape') onClose?.();
+      if (event.key === 'Escape') onCloseRef.current?.();
     };
     document.addEventListener('keydown', onKeyDown);
     panel.current?.querySelector('input, select, textarea, button')?.focus();
@@ -27,7 +30,7 @@ export function Modal({ open, title, onClose, children, footer, size = 'md' }) {
       document.body.style.overflow = overflow;
       previouslyFocused.current?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 
@@ -183,10 +186,4 @@ export function Button({ variant = 'primary', busy = false, children, className 
       {children}
     </button>
   );
-}
-
-/** Field-level validation errors, keyed by field name, from an API rejection. */
-export function fieldErrors(error) {
-  if (!Array.isArray(error?.data?.errors)) return {};
-  return error.data.errors.reduce((acc, field) => ({ ...acc, [field.path]: field.message }), {});
 }

@@ -159,10 +159,10 @@ export function MoveHistoryPage() {
         description="The immutable ledger of every stock movement and inventory mutation."
       />
 
-      <Card>
+      <Card className="overflow-hidden">
         <div className="border-b border-slate-200 bg-slate-50/50 p-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 items-end">
-            <div className="lg:col-span-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 xl:grid-cols-12 gap-3 items-end">
+            <div className="sm:col-span-2 md:col-span-3 lg:col-span-2 xl:col-span-3">
               <label
                 htmlFor="moves-search"
                 className="mb-1 block text-xs font-medium text-slate-600 uppercase tracking-wider"
@@ -181,7 +181,7 @@ export function MoveHistoryPage() {
               />
             </div>
 
-            <div>
+            <div className="sm:col-span-1 md:col-span-1 lg:col-span-1 xl:col-span-2">
               <Select
                 label="Warehouse"
                 name="warehouseId"
@@ -198,7 +198,7 @@ export function MoveHistoryPage() {
               />
             </div>
 
-            <div>
+            <div className="sm:col-span-1 md:col-span-1 lg:col-span-1 xl:col-span-2">
               <Select
                 label="Document Type"
                 name="documentType"
@@ -217,7 +217,7 @@ export function MoveHistoryPage() {
               />
             </div>
 
-            <div>
+            <div className="sm:col-span-1 md:col-span-1 lg:col-span-1 xl:col-span-2">
               <Select
                 label="Status"
                 name="state"
@@ -237,35 +237,34 @@ export function MoveHistoryPage() {
               />
             </div>
 
-            <div className="flex items-center gap-2">
-              <div className="flex-1">
-                <label className="mb-1 block text-xs font-medium text-slate-600 uppercase tracking-wider">
-                  From Date
-                </label>
-                <input
-                  type="date"
-                  value={dateFrom}
-                  onChange={(e) => {
-                    setDateFrom(e.target.value);
-                    setPage(1);
-                  }}
-                  className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 shadow-sm"
-                />
-              </div>
-              <div className="flex-1">
-                <label className="mb-1 block text-xs font-medium text-slate-600 uppercase tracking-wider">
-                  To Date
-                </label>
-                <input
-                  type="date"
-                  value={dateTo}
-                  onChange={(e) => {
-                    setDateTo(e.target.value);
-                    setPage(1);
-                  }}
-                  className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 shadow-sm"
-                />
-              </div>
+            <div className="sm:col-span-1 md:col-span-1 lg:col-span-1 xl:col-span-1.5">
+              <label className="mb-1 block text-xs font-medium text-slate-600 uppercase tracking-wider">
+                From Date
+              </label>
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={(e) => {
+                  setDateFrom(e.target.value);
+                  setPage(1);
+                }}
+                className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 shadow-sm"
+              />
+            </div>
+
+            <div className="sm:col-span-1 md:col-span-1 lg:col-span-1 xl:col-span-1.5">
+              <label className="mb-1 block text-xs font-medium text-slate-600 uppercase tracking-wider">
+                To Date
+              </label>
+              <input
+                type="date"
+                value={dateTo}
+                onChange={(e) => {
+                  setDateTo(e.target.value);
+                  setPage(1);
+                }}
+                className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 shadow-sm"
+              />
             </div>
           </div>
 

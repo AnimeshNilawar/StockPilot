@@ -2,14 +2,14 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AppShell, Card, PageHeader } from '../components/AppShell';
 import { ActiveBadge, DataTable } from '../components/DataTable';
-import { Button, Checkbox, Modal, TextInput, fieldErrors } from '../components/ui';
+import { Button, Checkbox, Modal, TextInput } from '../components/ui';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { Pagination } from '../components/Pagination';
 import { useDebounced } from '../hooks/useDebounced';
 import { api, catalogKeys, useApiMutation, useListQuery } from '../hooks/useApi';
 import { useAuth } from '../hooks/useAuth';
 import { can } from '../lib/permissions';
-import { errorMessage } from '../lib/format';
+import { errorMessage, fieldErrors } from '../lib/format';
 import { useToast } from '../components/Toast';
 
 export function WarehousesPage() {

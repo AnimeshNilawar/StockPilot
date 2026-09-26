@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { AppShell, Card, PageHeader } from '../components/AppShell';
 import { ActiveBadge, Badge, DataTable } from '../components/DataTable';
-import { Button, Checkbox, Modal, Select, TextInput, fieldErrors } from '../components/ui';
+import { Button, Checkbox, Modal, Select, TextInput } from '../components/ui';
 import { EmptyState, ErrorState, LoadingState } from '../components/States';
 import { Pagination } from '../components/Pagination';
 import { useDebounced } from '../hooks/useDebounced';
@@ -16,7 +16,7 @@ import {
 } from '../hooks/useApi';
 import { useAuth } from '../hooks/useAuth';
 import { can } from '../lib/permissions';
-import { errorMessage, locationTypeLabel } from '../lib/format';
+import { errorMessage, fieldErrors, locationTypeLabel } from '../lib/format';
 import { useToast } from '../components/Toast';
 
 const TYPE_OPTIONS = ['INTERNAL', 'PRODUCTION', 'SCRAP', 'TRANSIT', 'VENDOR', 'CUSTOMER'].map(

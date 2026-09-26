@@ -151,7 +151,7 @@ export function AppShell({ children }) {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col">
       <header className="sticky top-0 z-40 border-b border-slate-200 bg-white shadow-xs" ref={navRef}>
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-2.5 sm:px-6">
+        <div className="mx-auto flex w-full max-w-[1600px] items-center justify-between gap-4 px-4 py-2.5 sm:px-6 lg:px-8">
           {/* Left brand & Desktop Nav */}
           <div className="flex items-center gap-6">
             <NavLink to="/dashboard" className="flex items-center gap-2 group">
@@ -386,7 +386,7 @@ export function AppShell({ children }) {
         )}
       </header>
 
-      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6">{children}</main>
+      <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-6 sm:px-6 lg:px-8">{children}</main>
     </div>
   );
 }

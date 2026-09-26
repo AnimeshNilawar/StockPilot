@@ -18,11 +18,150 @@ import {
   Modal,
   TextInput,
   Select,
-  Checkbox,
   Button,
-  fieldErrors,
 } from '../components/ui';
 import { useToast } from '../components/Toast';
+
+/**
+ * Searchable Multi-Select Warehouse Picker.
+ * - Client-side search against pre-loaded warehouse list by name and code
+ * - Preserves hidden selected items during filtering
+ * - Displays "Selected: X of Total"
+ * - Provides "Select all visible" and "Clear visible" convenience controls
+ */
+function WarehousePicker({
+  warehouses = [],
+  selectedWarehouseIds = [],
+  onChange,
+  searchTerm = '',
+  onSearchChange,
+}) {
+  const normalizedSearch = searchTerm.trim().toLowerCase();
+
+  const filteredWarehouses = warehouses.filter((wh) => {
+    if (!normalizedSearch) return true;
+    const nameMatch = (wh.name || '').toLowerCase().includes(normalizedSearch);
+    const codeMatch = (wh.shortCode || '').toLowerCase().includes(normalizedSearch);
+    return nameMatch || codeMatch;
+  });
+
+  const handleSelectVisible = () => {
+    const visibleIds = filteredWarehouses.map((w) => w.id);
+    const newSelected = Array.from(new Set([...selectedWarehouseIds, ...visibleIds]));
+    onChange(newSelected);
+  };
+
+  const handleClearVisible = () => {
+    const visibleIdsSet = new Set(filteredWarehouses.map((w) => w.id));
+    const newSelected = selectedWarehouseIds.filter((id) => !visibleIdsSet.has(id));
+    onChange(newSelected);
+  };
+
+  const handleToggle = (whId) => {
+    if (selectedWarehouseIds.includes(whId)) {
+      onChange(selectedWarehouseIds.filter((id) => id !== whId));
+    } else {
+      onChange([...selectedWarehouseIds, whId]);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between text-xs">
+        <span className="font-semibold text-slate-700">
+          Selected: <span className="text-blue-600 font-bold">{selectedWarehouseIds.length}</span>
+          {warehouses.length > 0 && <span className="text-slate-400 font-normal"> of {warehouses.length}</span>}
+        </span>
+        {filteredWarehouses.length > 0 && (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleSelectVisible}
+              className="text-[11px] font-medium text-blue-600 hover:text-blue-800 transition-colors"
+            >
+              Select all visible
+            </button>
+            <span className="text-slate-300">|</span>
+            <button
+              type="button"
+              onClick={handleClearVisible}
+              className="text-[11px] font-medium text-slate-600 hover:text-slate-800 transition-colors"
+            >
+              Clear visible
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Search Bar */}
+      <div className="relative">
+        <input
+          type="text"
+          value={searchTerm}
+          onChange={(e) => onSearchChange(e.target.value)}
+          placeholder="Search warehouses..."
+          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 pl-8 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 shadow-2xs transition-all"
+        />
+        <svg
+          className="absolute left-2.5 top-2 h-3.5 w-3.5 text-slate-400 pointer-events-none"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+          />
+        </svg>
+        {searchTerm && (
+          <button
+            type="button"
+            onClick={() => onSearchChange('')}
+            className="absolute right-2.5 top-1.5 text-xs text-slate-400 hover:text-slate-600 font-bold px-1"
+          >
+            ×
+          </button>
+        )}
+      </div>
+
+      {/* Scrollable Checkbox List */}
+      <div className="space-y-1 rounded-xl border border-slate-200 p-2 bg-slate-50/50 max-h-48 overflow-y-auto">
+        {filteredWarehouses.length === 0 ? (
+          <div className="py-4 text-center text-xs text-slate-500">
+            No warehouses found
+          </div>
+        ) : (
+          filteredWarehouses.map((wh) => {
+            const isChecked = selectedWarehouseIds.includes(wh.id);
+            return (
+              <label
+                key={wh.id}
+                className={`flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 transition-colors cursor-pointer ${
+                  isChecked ? 'bg-blue-50/70 border border-blue-100' : 'hover:bg-white'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={isChecked}
+                  onChange={() => handleToggle(wh.id)}
+                  className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-2 focus:ring-blue-100 cursor-pointer"
+                />
+                <span className="text-xs font-medium text-slate-800 flex-1">
+                  {wh.name}{' '}
+                  <span className="font-mono text-[11px] text-slate-500 font-normal">
+                    ({wh.shortCode})
+                  </span>
+                </span>
+              </label>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
 
 export function UsersPage() {
   const { user: currentUser } = useAuth();
@@ -39,6 +178,9 @@ export function UsersPage() {
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
+
+  const [warehouseSearch, setWarehouseSearch] = useState('');
+  const [createWarehouseSearch, setCreateWarehouseSearch] = useState('');
 
   const [formValues, setFormValues] = useState({
     name: '',
@@ -78,6 +220,7 @@ export function UsersPage() {
     onSuccess: () => {
       toast.success('User created successfully');
       setCreateModalOpen(false);
+      setCreateWarehouseSearch('');
       resetForm();
     },
     onError: (err) => {
@@ -92,6 +235,7 @@ export function UsersPage() {
       toast.success('User updated successfully');
       setEditModalOpen(false);
       setSelectedUser(null);
+      setWarehouseSearch('');
       resetForm();
     },
     onError: (err) => {
@@ -120,6 +264,7 @@ export function UsersPage() {
       status: 'ACTIVE',
       warehouseIds: [],
     });
+    setCreateWarehouseSearch('');
     setCreateModalOpen(true);
   };
 
@@ -133,19 +278,8 @@ export function UsersPage() {
       status: user.status || 'ACTIVE',
       warehouseIds: (user.warehouses || []).map((w) => w.id),
     });
+    setWarehouseSearch('');
     setEditModalOpen(true);
-  };
-
-  const handleWarehouseToggle = (whId) => {
-    setFormValues((prev) => {
-      const exists = prev.warehouseIds.includes(whId);
-      return {
-        ...prev,
-        warehouseIds: exists
-          ? prev.warehouseIds.filter((id) => id !== whId)
-          : [...prev.warehouseIds, whId],
-      };
-    });
   };
 
   const handleCreateSubmit = (e) => {
@@ -434,11 +568,20 @@ export function UsersPage() {
       <Modal
         open={createModalOpen}
         title="Add New User"
-        onClose={() => setCreateModalOpen(false)}
+        onClose={() => {
+          setCreateModalOpen(false);
+          setCreateWarehouseSearch('');
+        }}
         size="md"
         footer={
           <div className="flex gap-2">
-            <Button variant="secondary" onClick={() => setCreateModalOpen(false)}>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setCreateModalOpen(false);
+                setCreateWarehouseSearch('');
+              }}
+            >
               Cancel
             </Button>
             <Button
@@ -504,21 +647,13 @@ export function UsersPage() {
                 unrestricted system-wide access across all warehouses automatically.
               </p>
             ) : (
-              <div className="space-y-2 rounded-xl border border-slate-200 p-3 bg-slate-50/50 max-h-48 overflow-y-auto">
-                {warehouses.length === 0 ? (
-                  <p className="text-xs text-slate-500">No active warehouses available.</p>
-                ) : (
-                  warehouses.map((wh) => (
-                    <Checkbox
-                      key={wh.id}
-                      name={`wh-${wh.id}`}
-                      label={`${wh.name} (${wh.shortCode})`}
-                      checked={formValues.warehouseIds.includes(wh.id)}
-                      onChange={() => handleWarehouseToggle(wh.id)}
-                    />
-                  ))
-                )}
-              </div>
+              <WarehousePicker
+                warehouses={warehouses}
+                selectedWarehouseIds={formValues.warehouseIds}
+                onChange={(newIds) => setFormValues({ ...formValues, warehouseIds: newIds })}
+                searchTerm={createWarehouseSearch}
+                onSearchChange={setCreateWarehouseSearch}
+              />
             )}
           </div>
 
@@ -539,11 +674,20 @@ export function UsersPage() {
       <Modal
         open={editModalOpen}
         title={`Edit Access — ${selectedUser?.name || selectedUser?.email || 'User'}`}
-        onClose={() => setEditModalOpen(false)}
+        onClose={() => {
+          setEditModalOpen(false);
+          setWarehouseSearch('');
+        }}
         size="md"
         footer={
           <div className="flex gap-2">
-            <Button variant="secondary" onClick={() => setEditModalOpen(false)}>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setEditModalOpen(false);
+                setWarehouseSearch('');
+              }}
+            >
               Cancel
             </Button>
             <Button
@@ -593,21 +737,13 @@ export function UsersPage() {
                 unrestricted system-wide access across all warehouses automatically.
               </p>
             ) : (
-              <div className="space-y-2 rounded-xl border border-slate-200 p-3 bg-slate-50/50 max-h-48 overflow-y-auto">
-                {warehouses.length === 0 ? (
-                  <p className="text-xs text-slate-500">No active warehouses available.</p>
-                ) : (
-                  warehouses.map((wh) => (
-                    <Checkbox
-                      key={wh.id}
-                      name={`edit-wh-${wh.id}`}
-                      label={`${wh.name} (${wh.shortCode})`}
-                      checked={formValues.warehouseIds.includes(wh.id)}
-                      onChange={() => handleWarehouseToggle(wh.id)}
-                    />
-                  ))
-                )}
-              </div>
+              <WarehousePicker
+                warehouses={warehouses}
+                selectedWarehouseIds={formValues.warehouseIds}
+                onChange={(newIds) => setFormValues({ ...formValues, warehouseIds: newIds })}
+                searchTerm={warehouseSearch}
+                onSearchChange={setWarehouseSearch}
+              />
             )}
           </div>
 
