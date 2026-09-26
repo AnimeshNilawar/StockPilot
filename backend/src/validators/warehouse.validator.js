@@ -9,6 +9,18 @@ const list = z
   })
   .extend(paginationSchema.shape);
 
+// Free-text postal address. Zod strips any key the schema does not declare, so
+// this field has to exist here or every address is silently discarded before it
+// reaches the controller. Trimmed, an empty string becomes NULL (so the UI
+// never has to tell "blank" from "not set"), and `undefined` is preserved so a
+// partial update can leave the stored address untouched.
+const address = z
+  .union([z.string(), z.null()])
+  .optional()
+  .transform((value) =>
+    value === undefined ? undefined : value === null ? null : value.trim() || null,
+  );
+
 const create = z.object({
   name: z.string().trim().min(1).max(120),
   shortCode: z
@@ -18,11 +30,13 @@ const create = z.object({
     .max(30)
     .regex(/^[A-Za-z0-9_-]+$/, 'Short code may only contain letters, digits, underscore or hyphen')
     .transform((value) => value.toUpperCase()),
+  address,
   isActive: z.boolean().optional(),
 });
 
 const update = z.object({
   name: z.string().trim().min(1).max(120).optional(),
+  address,
   isActive: z.boolean().optional(),
 });
 

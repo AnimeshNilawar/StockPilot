@@ -16,7 +16,7 @@ describe('OTP API', () => {
         email: 'otpuser@stockpilot.local',
         passwordHash: pwHash,
         roleId: role.id,
-      }
+      },
     });
   });
 

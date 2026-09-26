@@ -11,14 +11,20 @@ describe('RBAC & Warehouse Access API', () => {
   let warehouse;
 
   beforeAll(async () => {
-    const admin = await prisma.user.findUnique({ where: { email: 'admin@stockpilot.local' }, include: { role: { include: { permissions: { include: { permission: true } } } }, warehouseAccess: true } });
+    const admin = await prisma.user.findUnique({
+      where: { email: 'admin@stockpilot.local' },
+      include: {
+        role: { include: { permissions: { include: { permission: true } } } },
+        warehouseAccess: true,
+      },
+    });
     adminToken = authService.generateAccessToken(admin);
 
     // Create a staff role user
     const staffRole = await prisma.role.findUnique({ where: { name: 'WAREHOUSE_STAFF' } });
     const pwHash = await authService.hashPassword('Staff123');
-    
-    warehouse = await prisma.warehouse.create({ data: { name: 'Main WH' } });
+
+    warehouse = await prisma.warehouse.create({ data: { name: 'Main WH', shortCode: 'MAINWH' } });
 
     const staffUser = await prisma.user.create({
       data: {
@@ -27,10 +33,13 @@ describe('RBAC & Warehouse Access API', () => {
         name: 'Staff User',
         roleId: staffRole.id,
         warehouseAccess: {
-          create: { warehouseId: warehouse.id }
-        }
+          create: { warehouseId: warehouse.id },
+        },
       },
-      include: { role: { include: { permissions: { include: { permission: true } } } }, warehouseAccess: true }
+      include: {
+        role: { include: { permissions: { include: { permission: true } } } },
+        warehouseAccess: true,
+      },
     });
 
     staffToken = authService.generateAccessToken(staffUser);

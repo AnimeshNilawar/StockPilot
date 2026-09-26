@@ -6,17 +6,13 @@ const routes = require('./routes');
 const notFound = require('./middleware/notFound');
 const errorHandler = require('./middleware/errorHandler');
 const { env } = require('./config/env');
+const { corsOptions } = require('./config/cors');
 
 const app = express();
 
 app.use(express.json());
 app.use(cookieParser());
-app.use(
-  cors({
-    origin: env.FRONTEND_URL,
-    credentials: true,
-  }),
-);
+app.use(cors(corsOptions));
 
 if (env.NODE_ENV !== 'test') {
   app.use(morgan('dev'));
