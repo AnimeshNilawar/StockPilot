@@ -1,5 +1,3 @@
-const crypto = require('crypto');
-
 module.exports = {
   jwt: {
     secret: process.env.JWT_SECRET || 'super-secret-local-dev-key',
@@ -18,5 +16,5 @@ module.exports = {
   otp: {
     expirationMinutes: 10,
     maxAttempts: 5,
-  }
+  },
 };

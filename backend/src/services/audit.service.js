@@ -1,8 +1,15 @@
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const { prisma } = require('../lib/prisma');
 
 class AuditService {
-  async log({ userId, action, entityType, entityId = null, metadata = null, ip = null, userAgent = null }) {
+  async log({
+    userId,
+    action,
+    entityType,
+    entityId = null,
+    metadata = null,
+    ip = null,
+    userAgent = null,
+  }) {
     try {
       // Strip out sensitive info from metadata just in case
       if (metadata) {

@@ -1,8 +1,7 @@
 const { z } = require('zod');
-const { PrismaClient } = require('@prisma/client');
 const auditService = require('../services/audit.service');
 const authService = require('../services/auth.service');
-const prisma = new PrismaClient();
+const { prisma } = require('../lib/prisma');
 
 const createUserSchema = z.object({
   email: z.string().email().toLowerCase(),
@@ -49,12 +48,16 @@ class UserController {
 
       const existing = await prisma.user.findUnique({ where: { email } });
       if (existing) {
-        return res.status(400).json({ success: false, message: 'Email in use', code: 'EMAIL_IN_USE' });
+        return res
+          .status(400)
+          .json({ success: false, message: 'Email in use', code: 'EMAIL_IN_USE' });
       }
 
       const role = await prisma.role.findUnique({ where: { id: roleId } });
       if (!role) {
-        return res.status(400).json({ success: false, message: 'Invalid role', code: 'INVALID_ROLE' });
+        return res
+          .status(400)
+          .json({ success: false, message: 'Invalid role', code: 'INVALID_ROLE' });
       }
 
       const passwordHash = await authService.hashPassword(password);
@@ -74,7 +77,9 @@ class UserController {
       res.status(201).json({ success: true, data: user });
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ success: false, message: 'Validation failed', code: 'VALIDATION_ERROR' });
+        return res
+          .status(400)
+          .json({ success: false, message: 'Validation failed', code: 'VALIDATION_ERROR' });
       }
       next(error);
     }
@@ -107,7 +112,9 @@ class UserController {
       res.status(200).json({ success: true, data: user });
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ success: false, message: 'Validation failed', code: 'VALIDATION_ERROR' });
+        return res
+          .status(400)
+          .json({ success: false, message: 'Validation failed', code: 'VALIDATION_ERROR' });
       }
       next(error);
     }
@@ -120,7 +127,9 @@ class UserController {
 
       const role = await prisma.role.findUnique({ where: { id: roleId } });
       if (!role) {
-        return res.status(400).json({ success: false, message: 'Invalid role', code: 'INVALID_ROLE' });
+        return res
+          .status(400)
+          .json({ success: false, message: 'Invalid role', code: 'INVALID_ROLE' });
       }
 
       const user = await prisma.user.update({
@@ -144,7 +153,9 @@ class UserController {
       res.status(200).json({ success: true, data: user });
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ success: false, message: 'Validation failed', code: 'VALIDATION_ERROR' });
+        return res
+          .status(400)
+          .json({ success: false, message: 'Validation failed', code: 'VALIDATION_ERROR' });
       }
       next(error);
     }
@@ -158,7 +169,9 @@ class UserController {
       // Verify user exists
       const user = await prisma.user.findUnique({ where: { id } });
       if (!user) {
-        return res.status(404).json({ success: false, message: 'User not found', code: 'NOT_FOUND' });
+        return res
+          .status(404)
+          .json({ success: false, message: 'User not found', code: 'NOT_FOUND' });
       }
 
       await prisma.$transaction(async (tx) => {
@@ -167,7 +180,7 @@ class UserController {
         // Create new ones
         if (warehouseIds.length > 0) {
           await tx.userWarehouseAccess.createMany({
-            data: warehouseIds.map(wId => ({ userId: id, warehouseId: wId })),
+            data: warehouseIds.map((wId) => ({ userId: id, warehouseId: wId })),
           });
         }
       });
@@ -184,7 +197,9 @@ class UserController {
       res.status(200).json({ success: true, message: 'Warehouses assigned successfully' });
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ success: false, message: 'Validation failed', code: 'VALIDATION_ERROR' });
+        return res
+          .status(400)
+          .json({ success: false, message: 'Validation failed', code: 'VALIDATION_ERROR' });
       }
       next(error);
     }

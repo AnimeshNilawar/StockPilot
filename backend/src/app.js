@@ -3,6 +3,7 @@ const cors = require('cors');
 const morgan = require('morgan');
 const cookieParser = require('cookie-parser');
 const routes = require('./routes');
+const notFound = require('./middleware/notFound');
 const errorHandler = require('./middleware/errorHandler');
 const { env } = require('./config/env');
 
@@ -23,13 +24,7 @@ if (env.NODE_ENV !== 'test') {
 
 app.use('/api/v1', routes);
 
-app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    message: 'Route not found',
-    code: 'NOT_FOUND',
-  });
-});
+app.use(notFound);
 
 app.use(errorHandler);
 

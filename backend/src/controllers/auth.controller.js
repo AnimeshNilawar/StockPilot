@@ -1,9 +1,8 @@
 const { z } = require('zod');
-const { PrismaClient } = require('@prisma/client');
 const authService = require('../services/auth.service');
 const auditService = require('../services/audit.service');
 const authConfig = require('../config/auth');
-const prisma = new PrismaClient();
+const { prisma } = require('../lib/prisma');
 
 const signupSchema = z.object({
   email: z.string().email().toLowerCase(),
@@ -30,6 +29,27 @@ const resetPasswordSchema = z.object({
   newPassword: z.string().min(8),
 });
 
+/**
+ * Single source of truth for the user payload the client receives.
+ *
+ * `login` and `/auth/me` must agree: the SPA seeds its session cache with the
+ * login response and treats it as fresh, so a thinner login payload would leave
+ * the UI believing the caller has no permissions and hide every protected action
+ * until a hard reload.
+ *
+ * The UI hides actions the caller may not perform. The server re-checks every one
+ * of them, so this is presentation only.
+ */
+const serializeUser = (user) => ({
+  id: user.id,
+  email: user.email,
+  name: user.name,
+  role: user.role.name,
+  status: user.status,
+  warehouseIds: (user.warehouseAccess || []).map((w) => w.warehouseId),
+  permissions: (user.role.permissions || []).map((p) => p.permission.action),
+});
+
 class AuthController {
   async signup(req, res, next) {
     try {
@@ -39,13 +59,17 @@ class AuthController {
       if (existingUser) {
         // Return a generic error or safely indicate the issue depending on security policy
         // For standard local apps, duplicate email error is fine, but we'll stick to secure behavior
-        return res.status(400).json({ success: false, message: 'Email already in use', code: 'EMAIL_IN_USE' });
+        return res
+          .status(400)
+          .json({ success: false, message: 'Email already in use', code: 'EMAIL_IN_USE' });
       }
 
       // Assign default safe role (WAREHOUSE_STAFF)
       let defaultRole = await prisma.role.findUnique({ where: { name: 'WAREHOUSE_STAFF' } });
       if (!defaultRole) {
-        return res.status(500).json({ success: false, message: 'Default role not found', code: 'SERVER_ERROR' });
+        return res
+          .status(500)
+          .json({ success: false, message: 'Default role not found', code: 'SERVER_ERROR' });
       }
 
       const passwordHash = await authService.hashPassword(password);
@@ -73,7 +97,12 @@ class AuthController {
       });
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ success: false, message: 'Validation failed', code: 'VALIDATION_ERROR', errors: error.errors });
+        return res.status(400).json({
+          success: false,
+          message: 'Validation failed',
+          code: 'VALIDATION_ERROR',
+          errors: error.errors,
+        });
       }
       next(error);
     }
@@ -85,19 +114,30 @@ class AuthController {
 
       const user = await prisma.user.findUnique({
         where: { email },
-        include: { role: true },
+        include: {
+          role: { include: { permissions: { include: { permission: true } } } },
+          warehouseAccess: true,
+        },
       });
 
       if (!user || !(await authService.verifyPassword(user.passwordHash, password))) {
-        return res.status(401).json({ success: false, message: 'Invalid credentials', code: 'UNAUTHORIZED' });
+        return res
+          .status(401)
+          .json({ success: false, message: 'Invalid credentials', code: 'UNAUTHORIZED' });
       }
 
       if (user.status !== 'ACTIVE') {
-        return res.status(403).json({ success: false, message: 'Account is inactive', code: 'FORBIDDEN' });
+        return res
+          .status(403)
+          .json({ success: false, message: 'Account is inactive', code: 'FORBIDDEN' });
       }
 
       const accessToken = authService.generateAccessToken(user);
-      const refreshToken = await authService.createRefreshToken(user.id, req.ip, req.headers['user-agent']);
+      const refreshToken = await authService.createRefreshToken(
+        user.id,
+        req.ip,
+        req.headers['user-agent'],
+      );
 
       await auditService.log({
         userId: user.id,
@@ -113,17 +153,14 @@ class AuthController {
         success: true,
         data: {
           accessToken,
-          user: {
-            id: user.id,
-            email: user.email,
-            name: user.name,
-            role: user.role.name,
-          }
+          user: serializeUser(user),
         },
       });
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ success: false, message: 'Validation failed', code: 'VALIDATION_ERROR' });
+        return res
+          .status(400)
+          .json({ success: false, message: 'Validation failed', code: 'VALIDATION_ERROR' });
       }
       next(error);
     }
@@ -133,7 +170,9 @@ class AuthController {
     try {
       const refreshToken = req.cookies[authConfig.cookie.name];
       if (!refreshToken) {
-        return res.status(401).json({ success: false, message: 'No refresh token', code: 'UNAUTHORIZED' });
+        return res
+          .status(401)
+          .json({ success: false, message: 'No refresh token', code: 'UNAUTHORIZED' });
       }
 
       const tokenHash = authService.hashToken(refreshToken);
@@ -144,26 +183,37 @@ class AuthController {
 
       if (!tokenRecord) {
         res.clearCookie(authConfig.cookie.name);
-        return res.status(401).json({ success: false, message: 'Invalid refresh token', code: 'UNAUTHORIZED' });
+        return res
+          .status(401)
+          .json({ success: false, message: 'Invalid refresh token', code: 'UNAUTHORIZED' });
       }
 
       if (tokenRecord.revoked) {
         // Token reuse detected -> revoke family
         await authService.revokeTokenFamily(tokenRecord.family);
         res.clearCookie(authConfig.cookie.name);
-        return res.status(401).json({ success: false, message: 'Token compromised', code: 'UNAUTHORIZED' });
+        return res
+          .status(401)
+          .json({ success: false, message: 'Token compromised', code: 'UNAUTHORIZED' });
       }
 
       if (new Date() > tokenRecord.expiresAt) {
-        await prisma.refreshToken.update({ where: { id: tokenRecord.id }, data: { revoked: true } });
+        await prisma.refreshToken.update({
+          where: { id: tokenRecord.id },
+          data: { revoked: true },
+        });
         res.clearCookie(authConfig.cookie.name);
-        return res.status(401).json({ success: false, message: 'Token expired', code: 'UNAUTHORIZED' });
+        return res
+          .status(401)
+          .json({ success: false, message: 'Token expired', code: 'UNAUTHORIZED' });
       }
 
       // Check user status
       if (tokenRecord.user.status !== 'ACTIVE') {
         res.clearCookie(authConfig.cookie.name);
-        return res.status(403).json({ success: false, message: 'Account is inactive', code: 'FORBIDDEN' });
+        return res
+          .status(403)
+          .json({ success: false, message: 'Account is inactive', code: 'FORBIDDEN' });
       }
 
       // Revoke old token
@@ -182,14 +232,14 @@ class AuthController {
           expiresAt: new Date(Date.now() + authConfig.cookie.options.maxAge),
           ip: req.ip,
           userAgent: req.headers['user-agent'],
-        }
+        },
       });
 
       res.cookie(authConfig.cookie.name, newRawRefreshToken, authConfig.cookie.options);
 
       res.status(200).json({
         success: true,
-        data: { accessToken: newAccessToken }
+        data: { accessToken: newAccessToken },
       });
     } catch (error) {
       next(error);
@@ -206,9 +256,9 @@ class AuthController {
           data: { revoked: true },
         });
       }
-      
+
       res.clearCookie(authConfig.cookie.name);
-      
+
       if (req.user) {
         await auditService.log({
           userId: req.user.id,
@@ -229,14 +279,7 @@ class AuthController {
     try {
       res.status(200).json({
         success: true,
-        data: {
-          id: req.user.id,
-          email: req.user.email,
-          name: req.user.name,
-          role: req.user.role.name,
-          status: req.user.status,
-          warehouseIds: req.user.warehouseAccess.map(w => w.warehouseId),
-        },
+        data: serializeUser(req.user),
       });
     } catch (error) {
       next(error);
@@ -247,7 +290,7 @@ class AuthController {
     try {
       const { email } = forgotPasswordSchema.parse(req.body);
       const user = await prisma.user.findUnique({ where: { email } });
-      
+
       if (user && user.status === 'ACTIVE') {
         const otp = authService.generateOtp();
         const otpHash = authService.hashToken(otp);
@@ -258,7 +301,7 @@ class AuthController {
             userId: user.id,
             otpHash,
             expiresAt,
-          }
+          },
         });
 
         // In development, log the OTP for testing purposes
@@ -268,10 +311,14 @@ class AuthController {
       }
 
       // Always return success to prevent email enumeration
-      res.status(200).json({ success: true, message: 'If the email exists, an OTP has been generated.' });
+      res
+        .status(200)
+        .json({ success: true, message: 'If the email exists, an OTP has been generated.' });
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ success: false, message: 'Validation failed', code: 'VALIDATION_ERROR' });
+        return res
+          .status(400)
+          .json({ success: false, message: 'Validation failed', code: 'VALIDATION_ERROR' });
       }
       next(error);
     }
@@ -283,7 +330,9 @@ class AuthController {
       const user = await prisma.user.findUnique({ where: { email } });
 
       if (!user) {
-        return res.status(400).json({ success: false, message: 'Invalid OTP', code: 'INVALID_OTP' });
+        return res
+          .status(400)
+          .json({ success: false, message: 'Invalid OTP', code: 'INVALID_OTP' });
       }
 
       const activeOtpRecord = await prisma.otpReset.findFirst({
@@ -291,22 +340,26 @@ class AuthController {
           userId: user.id,
           used: false,
           attempts: { lt: authConfig.otp.maxAttempts },
-          expiresAt: { gt: new Date() }
+          expiresAt: { gt: new Date() },
         },
-        orderBy: { createdAt: 'desc' }
+        orderBy: { createdAt: 'desc' },
       });
 
       if (!activeOtpRecord) {
-        return res.status(400).json({ success: false, message: 'Invalid or expired OTP', code: 'INVALID_OTP' });
+        return res
+          .status(400)
+          .json({ success: false, message: 'Invalid or expired OTP', code: 'INVALID_OTP' });
       }
 
       const otpHash = authService.hashToken(otp);
       if (activeOtpRecord.otpHash !== otpHash) {
         await prisma.otpReset.update({
           where: { id: activeOtpRecord.id },
-          data: { attempts: { increment: 1 } }
+          data: { attempts: { increment: 1 } },
         });
-        return res.status(400).json({ success: false, message: 'Invalid OTP', code: 'INVALID_OTP' });
+        return res
+          .status(400)
+          .json({ success: false, message: 'Invalid OTP', code: 'INVALID_OTP' });
       }
 
       // Valid OTP -> Issue short-lived reset token
@@ -319,14 +372,16 @@ class AuthController {
         data: {
           used: true,
           resetTokenHash,
-          resetTokenExpiresAt
-        }
+          resetTokenExpiresAt,
+        },
       });
 
       res.status(200).json({ success: true, data: { resetToken } });
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ success: false, message: 'Validation failed', code: 'VALIDATION_ERROR' });
+        return res
+          .status(400)
+          .json({ success: false, message: 'Validation failed', code: 'VALIDATION_ERROR' });
       }
       next(error);
     }
@@ -339,11 +394,19 @@ class AuthController {
 
       const otpRecord = await prisma.otpReset.findUnique({
         where: { resetTokenHash },
-        include: { user: true }
+        include: { user: true },
       });
 
-      if (!otpRecord || !otpRecord.resetTokenExpiresAt || new Date() > otpRecord.resetTokenExpiresAt) {
-        return res.status(400).json({ success: false, message: 'Invalid or expired reset token', code: 'INVALID_TOKEN' });
+      if (
+        !otpRecord ||
+        !otpRecord.resetTokenExpiresAt ||
+        new Date() > otpRecord.resetTokenExpiresAt
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid or expired reset token',
+          code: 'INVALID_TOKEN',
+        });
       }
 
       const newPasswordHash = await authService.hashPassword(newPassword);
@@ -351,12 +414,12 @@ class AuthController {
       await prisma.$transaction([
         prisma.user.update({
           where: { id: otpRecord.userId },
-          data: { passwordHash: newPasswordHash }
+          data: { passwordHash: newPasswordHash },
         }),
         prisma.otpReset.update({
           where: { id: otpRecord.id },
-          data: { resetTokenExpiresAt: new Date() } // expire it immediately
-        })
+          data: { resetTokenExpiresAt: new Date() }, // expire it immediately
+        }),
       ]);
 
       // Revoke all existing sessions
@@ -373,7 +436,9 @@ class AuthController {
       res.status(200).json({ success: true, message: 'Password reset successfully' });
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ success: false, message: 'Validation failed', code: 'VALIDATION_ERROR' });
+        return res
+          .status(400)
+          .json({ success: false, message: 'Validation failed', code: 'VALIDATION_ERROR' });
       }
       next(error);
     }

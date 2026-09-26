@@ -1,5 +1,5 @@
 const { z } = require('zod');
-require('dotenv').config();
+require('dotenv').config({ quiet: true });
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),

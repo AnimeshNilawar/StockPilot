@@ -1,9 +1,8 @@
 const argon2 = require('argon2');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const { PrismaClient } = require('@prisma/client');
 const authConfig = require('../config/auth');
-const prisma = new PrismaClient();
+const { prisma } = require('../lib/prisma');
 
 class AuthService {
   async hashPassword(password) {
@@ -15,11 +14,9 @@ class AuthService {
   }
 
   generateAccessToken(user) {
-    return jwt.sign(
-      { sub: user.id, role: user.role.name, type: 'access' },
-      authConfig.jwt.secret,
-      { expiresIn: authConfig.jwt.accessExpiration }
-    );
+    return jwt.sign({ sub: user.id, role: user.role.name, type: 'access' }, authConfig.jwt.secret, {
+      expiresIn: authConfig.jwt.accessExpiration,
+    });
   }
 
   generateRawToken() {
