@@ -41,7 +41,7 @@ describe('Auth API', () => {
     it('should login and return tokens', async () => {
       const res = await request(app)
         .post('/api/v1/auth/login')
-        .send({ email: 'admin@stockpilot.local', password: 'Admin@1234' });
+        .send({ email: 'admin@stockpilot.local', password: 'Admin@12345' });
 
       expect(res.status).toBe(200);
       expect(res.body.data.accessToken).toBeDefined();
@@ -89,7 +89,7 @@ describe('Auth API', () => {
     it('should return exactly the same user shape from login as from /auth/me', async () => {
       const login = await request(app).post('/api/v1/auth/login').send({
         email: 'admin@stockpilot.local',
-        password: 'Admin@1234',
+        password: 'Admin@12345',
       });
       const me = await request(app)
         .get('/api/v1/auth/me')

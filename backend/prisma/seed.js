@@ -1,153 +1,97 @@
 const { PrismaClient } = require('@prisma/client');
 const authService = require('../src/services/auth.service');
+const inventoryService = require('../src/services/inventory.service');
 const { LOCATION_TYPES } = require('../src/domain/location');
+const { DOCUMENT_TYPES, REFERENCE_PREFIX } = require('../src/domain/documentType');
+const { DOC_STATES } = require('../src/domain/documentState');
+const crypto = require('crypto');
+
 const prisma = new PrismaClient();
 
-/**
- * Permission catalogue. `rolePermissions` maps each action to the roles that
- * hold it; the ADMIN role receives everything (see `allPermissions`).
- */
 const PERMISSIONS = [
-  'user.manage',
-  'warehouse.read',
-  'warehouse.write',
-  'location.read',
-  'location.write',
-  'product.read',
-  'product.write',
-  'receipt.create',
-  'receipt.edit',
-  'receipt.validate',
-  'delivery.create',
-  'delivery.edit',
-  'delivery.pick',
-  'delivery.validate',
-  'internal_transfer.create',
-  'internal_transfer.validate',
-  'adjustment.create',
-  'adjustment.validate',
-  'dashboard.view_all',
-  'move_history.view',
-  'stock.read',
-  'stock.move',
+  'user.manage', 'warehouse.read', 'warehouse.write', 'location.read', 'location.write',
+  'product.read', 'product.write', 'receipt.create', 'receipt.edit', 'receipt.validate',
+  'delivery.create', 'delivery.edit', 'delivery.pick', 'delivery.validate',
+  'internal_transfer.create', 'internal_transfer.validate', 'adjustment.create',
+  'adjustment.validate', 'dashboard.view_all', 'move_history.view', 'stock.read', 'stock.move',
 ];
 
 const ROLE_PERMISSIONS = {
   INVENTORY_MANAGER: [
-    'warehouse.read',
-    'warehouse.write',
-    'location.read',
-    'location.write',
-    'product.read',
-    'product.write',
-    'receipt.create',
-    'receipt.edit',
-    'receipt.validate',
-    'delivery.create',
-    'delivery.edit',
-    'delivery.pick',
-    'delivery.validate',
-    'internal_transfer.create',
-    'internal_transfer.validate',
-    'adjustment.create',
-    'adjustment.validate',
-    'dashboard.view_all',
-    'move_history.view',
-    'stock.read',
-    'stock.move',
+    'warehouse.read', 'warehouse.write', 'location.read', 'location.write',
+    'product.read', 'product.write', 'receipt.create', 'receipt.edit', 'receipt.validate',
+    'delivery.create', 'delivery.edit', 'delivery.pick', 'delivery.validate',
+    'internal_transfer.create', 'internal_transfer.validate', 'adjustment.create',
+    'adjustment.validate', 'dashboard.view_all', 'move_history.view', 'stock.read', 'stock.move',
   ],
-  // Staff execute operational work in their assigned warehouses only. They may
-  // not edit master data, validate deliveries, or approve adjustments — those
-  // stay with Admin / Inventory Manager.
   WAREHOUSE_STAFF: [
-    'warehouse.read',
-    'location.read',
-    'product.read',
-    'receipt.create',
-    'receipt.edit',
-    'receipt.validate',
-    'delivery.create',
-    'delivery.edit',
-    'delivery.pick',
-    'internal_transfer.create',
-    'adjustment.create',
-    'move_history.view',
-    'stock.read',
+    'warehouse.read', 'location.read', 'product.read', 'receipt.create', 'receipt.edit',
+    'receipt.validate', 'delivery.create', 'delivery.edit', 'delivery.pick',
+    'internal_transfer.create', 'adjustment.create', 'move_history.view', 'stock.read',
   ],
 };
 
 const ROLES = ['ADMIN', 'INVENTORY_MANAGER', 'WAREHOUSE_STAFF'];
 
-const UOMS = [
-  { code: 'PCS', name: 'Pieces' },
-  { code: 'KG', name: 'Kilogram' },
-  { code: 'G', name: 'Gram' },
-  { code: 'BOX', name: 'Box' },
-  { code: 'LTR', name: 'Litre' },
-  { code: 'MTR', name: 'Metre' },
-  { code: 'PKT', name: 'Packet' },
-  { code: 'SET', name: 'Set' },
+const DEMO_USERS = [
+  { email: 'admin@stockpilot.local', name: 'Admin', password: 'Admin@12345', role: 'ADMIN', warehouses: ['PUNE-MAIN', 'MUM-DIST'] },
+  { email: 'manager@stockpilot.local', name: 'Inventory Manager', password: 'Manager@12345', role: 'INVENTORY_MANAGER', warehouses: ['PUNE-MAIN', 'MUM-DIST'] },
+  { email: 'staff@stockpilot.local', name: 'Warehouse Staff', password: 'Staff@12345', role: 'WAREHOUSE_STAFF', warehouses: ['PUNE-MAIN'] },
 ];
+
+const WAREHOUSES = [
+  { name: 'Pune Main Warehouse', shortCode: 'PUNE-MAIN', address: 'Pune Industrial Area' },
+  { name: 'Mumbai Distribution Warehouse', shortCode: 'MUM-DIST', address: 'Mumbai Logistics Park' },
+];
+
+const LOCATIONS = {
+  'PUNE-MAIN': [
+    { name: 'Main Store', shortCode: 'P-STORE', type: LOCATION_TYPES.INTERNAL },
+    { name: 'Production Rack', shortCode: 'P-PROD', type: LOCATION_TYPES.INTERNAL },
+    { name: 'Packing Area', shortCode: 'P-PACK', type: LOCATION_TYPES.INTERNAL },
+    { name: 'Damaged Goods', shortCode: 'P-DMG', type: LOCATION_TYPES.SCRAP },
+    { name: 'Vendor Dock', shortCode: 'P-VEND', type: LOCATION_TYPES.VENDOR },
+    { name: 'Customer Dock', shortCode: 'P-CUST', type: LOCATION_TYPES.CUSTOMER },
+  ],
+  'MUM-DIST': [
+    { name: 'Main Store', shortCode: 'M-STORE', type: LOCATION_TYPES.INTERNAL },
+    { name: 'Packing Area', shortCode: 'M-PACK', type: LOCATION_TYPES.INTERNAL },
+    { name: 'Damaged Goods', shortCode: 'M-DMG', type: LOCATION_TYPES.SCRAP },
+    { name: 'Vendor Dock', shortCode: 'M-VEND', type: LOCATION_TYPES.VENDOR },
+    { name: 'Customer Dock', shortCode: 'M-CUST', type: LOCATION_TYPES.CUSTOMER },
+  ]
+};
 
 const CATEGORIES = [
   { name: 'Raw Materials', code: 'RAW' },
-  { name: 'Electronics', code: 'ELC' },
-  { name: 'Components', code: 'CMP', parent: 'Electronics' },
-  { name: 'Accessories', code: 'ACC', parent: 'Electronics' },
-  { name: 'Consumables', code: 'CSM' },
-  { name: 'Finished Goods', code: 'FIN' },
+  { name: 'Electronics', code: 'ELEC' },
+  { name: 'Packaging', code: 'PKG' },
+  { name: 'Office Supplies', code: 'OFF' },
+  { name: 'Safety Equipment', code: 'SAFE' },
 ];
 
-const DEMO_PRODUCTS = [
-  {
-    sku: 'STL-001',
-    name: 'Steel Rod',
-    category: 'Raw Materials',
-    uom: 'KG',
-    costPrice: '4.50',
-    reorderMin: '25',
-    reorderMax: '500',
-  },
-  {
-    sku: 'CPR-002',
-    name: 'Copper Wire',
-    category: 'Raw Materials',
-    uom: 'KG',
-    costPrice: '12.00',
-    reorderMin: '10',
-    reorderMax: '250',
-  },
-  {
-    sku: 'BRG-003',
-    name: 'Bearing',
-    category: 'Components',
-    uom: 'PCS',
-    costPrice: '180.00',
-    reorderMin: '20',
-    reorderMax: '400',
-  },
+const UOMS = [
+  { code: 'kg', name: 'Kilogram' },
+  { code: 'units', name: 'Units' },
+  { code: 'rolls', name: 'Rolls' },
+  { code: 'packs', name: 'Packs' },
+  { code: 'pairs', name: 'Pairs' },
 ];
 
-const DEFAULT_WAREHOUSE = {
-  name: 'Main Warehouse',
-  shortCode: 'MAIN',
-  address: 'Plant 1, Industrial Estate',
-};
-
-const DEFAULT_LOCATIONS = [
-  { name: 'Main Store', shortCode: 'STORE', type: LOCATION_TYPES.INTERNAL },
-  { name: 'Production Rack', shortCode: 'PROD', type: LOCATION_TYPES.PRODUCTION },
-  { name: 'Scrap', shortCode: 'SCRAP', type: LOCATION_TYPES.SCRAP },
-  { name: 'Transit', shortCode: 'TRANSIT', type: LOCATION_TYPES.TRANSIT },
-  // Boundary nodes: they terminate movements but never hold a balance.
-  { name: 'Vendor Dock', shortCode: 'VENDOR', type: LOCATION_TYPES.VENDOR },
-  { name: 'Customer Dock', shortCode: 'CUSTOMER', type: LOCATION_TYPES.CUSTOMER },
+const PRODUCTS = [
+  { sku: 'RM-STEEL-001', name: 'Stainless Steel Sheet', category: 'Raw Materials', uom: 'kg', reorderMin: 50 },
+  { sku: 'RM-ALU-001', name: 'Aluminium Rod', category: 'Raw Materials', uom: 'kg', reorderMin: 30 },
+  { sku: 'RM-COPPER-001', name: 'Copper Wire', category: 'Raw Materials', uom: 'kg', reorderMin: 20 },
+  { sku: 'ELEC-SENSOR-001', name: 'Industrial Sensor', category: 'Electronics', uom: 'units', reorderMin: 10 },
+  { sku: 'ELEC-RELAY-001', name: 'Control Relay', category: 'Electronics', uom: 'units', reorderMin: 20 },
+  { sku: 'PKG-BOX-L', name: 'Cardboard Box Large', category: 'Packaging', uom: 'units', reorderMin: 100 },
+  { sku: 'PKG-BUBBLE-001', name: 'Bubble Wrap Roll', category: 'Packaging', uom: 'rolls', reorderMin: 20 },
+  { sku: 'PKG-TAPE-001', name: 'Packing Tape', category: 'Packaging', uom: 'rolls', reorderMin: 50 },
+  { sku: 'OFF-PAPER-001', name: 'Thermal Printer Paper', category: 'Office Supplies', uom: 'packs', reorderMin: 10 },
+  { sku: 'SAFE-GLOVE-001', name: 'Safety Gloves', category: 'Safety Equipment', uom: 'pairs', reorderMin: 15 },
 ];
 
-async function main() {
-  console.log('Seeding database...');
-
-  // ----- Roles & permissions -------------------------------------------------
+async function seedRolesAndPermissions() {
   const roleByName = {};
   for (const roleName of ROLES) {
     roleByName[roleName] = await prisma.role.upsert({
@@ -166,16 +110,10 @@ async function main() {
     });
   }
 
-  // ADMIN holds every permission. Other roles follow ROLE_PERMISSIONS.
   const grant = async (roleName, actions) => {
     for (const action of actions) {
       await prisma.rolePermission.upsert({
-        where: {
-          roleId_permissionId: {
-            roleId: roleByName[roleName].id,
-            permissionId: permissionByAction[action].id,
-          },
-        },
+        where: { roleId_permissionId: { roleId: roleByName[roleName].id, permissionId: permissionByAction[action].id } },
         update: {},
         create: { roleId: roleByName[roleName].id, permissionId: permissionByAction[action].id },
       });
@@ -185,95 +123,215 @@ async function main() {
   await grant('ADMIN', PERMISSIONS);
   await grant('INVENTORY_MANAGER', ROLE_PERMISSIONS.INVENTORY_MANAGER);
   await grant('WAREHOUSE_STAFF', ROLE_PERMISSIONS.WAREHOUSE_STAFF);
+  return roleByName;
+}
 
-  // ----- Admin user ---------------------------------------------------------
-  const adminEmail = process.env.SEED_ADMIN_EMAIL || 'admin@stockpilot.local';
-  const adminPassword = process.env.SEED_ADMIN_PASSWORD || 'Admin@1234';
-  const adminHash = await authService.hashPassword(adminPassword);
+async function seedWarehousesAndLocations() {
+  const whByCode = {};
+  for (const wh of WAREHOUSES) {
+    whByCode[wh.shortCode] = await prisma.warehouse.upsert({
+      where: { shortCode: wh.shortCode },
+      update: { name: wh.name, address: wh.address },
+      create: wh,
+    });
+  }
 
-  const adminUser = await prisma.user.upsert({
-    where: { email: adminEmail },
-    update: {},
-    create: {
-      email: adminEmail,
-      name: 'System Admin',
-      passwordHash: adminHash,
-      roleId: roleByName.ADMIN.id,
-      status: 'ACTIVE',
-    },
-  });
+  const locByCode = {};
+  for (const [whCode, locs] of Object.entries(LOCATIONS)) {
+    const warehouse = whByCode[whCode];
+    for (const loc of locs) {
+      locByCode[loc.shortCode] = await prisma.location.upsert({
+        where: { warehouseId_shortCode: { warehouseId: warehouse.id, shortCode: loc.shortCode } },
+        update: { name: loc.name, type: loc.type },
+        create: { ...loc, warehouseId: warehouse.id },
+      });
+    }
+  }
+  return { whByCode, locByCode };
+}
 
-  // ----- Units of measure ----------------------------------------------------
+async function seedUsers(roleByName, whByCode) {
+  for (const u of DEMO_USERS) {
+    const passwordHash = await authService.hashPassword(u.password);
+    const user = await prisma.user.upsert({
+      where: { email: u.email },
+      update: { passwordHash, roleId: roleByName[u.role].id },
+      create: { email: u.email, name: u.name, passwordHash, roleId: roleByName[u.role].id, status: 'ACTIVE' },
+    });
+
+    // Clear existing accesses
+    await prisma.userWarehouseAccess.deleteMany({ where: { userId: user.id } });
+    
+    for (const whCode of u.warehouses) {
+      await prisma.userWarehouseAccess.create({
+        data: { userId: user.id, warehouseId: whByCode[whCode].id }
+      });
+    }
+  }
+}
+
+async function seedCatalog() {
   const uomByCode = {};
-  for (const uom of UOMS) {
-    uomByCode[uom.code] = await prisma.uom.upsert({
-      where: { code: uom.code },
-      update: { name: uom.name },
-      create: uom,
+  for (const u of UOMS) {
+    uomByCode[u.code] = await prisma.uom.upsert({
+      where: { code: u.code },
+      update: { name: u.name },
+      create: u,
     });
   }
 
-  // ----- Categories (hierarchical) -----------------------------------------
-  const categoryByName = {};
-  for (const entry of CATEGORIES) {
-    categoryByName[entry.name] = await prisma.category.upsert({
-      where: { name: entry.name },
+  const catByName = {};
+  for (const c of CATEGORIES) {
+    catByName[c.name] = await prisma.category.upsert({
+      where: { name: c.name },
       update: {},
+      create: { name: c.name },
+    });
+  }
+
+  const prodBySku = {};
+  for (const p of PRODUCTS) {
+    prodBySku[p.sku] = await prisma.product.upsert({
+      where: { sku: p.sku },
+      update: {
+        name: p.name,
+        categoryId: catByName[p.category].id,
+        uomId: uomByCode[p.uom].id,
+        reorderMin: p.reorderMin,
+      },
       create: {
-        name: entry.name,
-        parentId: entry.parent ? categoryByName[entry.parent].id : null,
+        sku: p.sku,
+        name: p.name,
+        categoryId: catByName[p.category].id,
+        uomId: uomByCode[p.uom].id,
+        costPrice: 0,
+        reorderMin: p.reorderMin,
       },
     });
   }
+  return prodBySku;
+}
 
-  // ----- Default warehouse & locations -------------------------------------
-  const warehouse = await prisma.warehouse.upsert({
-    where: { shortCode: DEFAULT_WAREHOUSE.shortCode },
-    update: { name: DEFAULT_WAREHOUSE.name, address: DEFAULT_WAREHOUSE.address },
-    create: DEFAULT_WAREHOUSE,
+async function createReceipt(reference, supplier, warehouse, linesData, prodBySku, locByCode, state = DOC_STATES.DONE) {
+  const existing = await prisma.receipt.findUnique({ where: { reference } });
+  if (existing) return existing; // Idempotency check for receipt creation
+
+  const receipt = await prisma.receipt.create({
+    data: {
+      reference,
+      supplier,
+      warehouseId: warehouse.id,
+      state: DOC_STATES.DRAFT,
+      lines: {
+        create: linesData.map(l => ({
+          productId: prodBySku[l.sku].id,
+          quantity: l.quantity,
+          destinationLocationId: locByCode[l.dest].id,
+        }))
+      }
+    },
+    include: { lines: true }
   });
 
-  for (const location of DEFAULT_LOCATIONS) {
-    await prisma.location.upsert({
-      where: {
-        warehouseId_shortCode: { warehouseId: warehouse.id, shortCode: location.shortCode },
-      },
-      update: { name: location.name, type: location.type },
-      create: { ...location, warehouseId: warehouse.id },
+  if (state === DOC_STATES.DONE) {
+    await prisma.$transaction(async (tx) => {
+      // Find the VENDOR location for this warehouse
+      const vendorLoc = await tx.location.findFirst({
+        where: { warehouseId: warehouse.id, type: LOCATION_TYPES.VENDOR }
+      });
+
+      for (const line of receipt.lines) {
+        await inventoryService.executeMove(tx, {
+          productId: line.productId,
+          fromLocationId: vendorLoc.id,
+          toLocationId: line.destinationLocationId,
+          quantity: line.quantity,
+          documentType: DOCUMENT_TYPES.RECEIPT,
+          documentId: receipt.id,
+          reference: receipt.reference,
+        });
+      }
+      await tx.receipt.update({
+        where: { id: receipt.id },
+        data: { state: DOC_STATES.DONE }
+      });
     });
   }
+  return receipt;
+}
 
-  // The admin sees every warehouse through the role bypass, but an explicit
-  // assignment keeps the data self-describing for non-privileged tooling.
-  await prisma.userWarehouseAccess.upsert({
-    where: { userId_warehouseId: { userId: adminUser.id, warehouseId: warehouse.id } },
-    update: {},
-    create: { userId: adminUser.id, warehouseId: warehouse.id },
-  });
+async function seedReceipts(whByCode, prodBySku, locByCode) {
+  // Receipt 1 (DONE) - Pune
+  await createReceipt('RCP-DEMO-001', 'Tata Steel Supplies', whByCode['PUNE-MAIN'], [
+    { sku: 'RM-STEEL-001', quantity: 100, dest: 'P-STORE' },
+    { sku: 'RM-ALU-001', quantity: 60, dest: 'P-STORE' }
+  ], prodBySku, locByCode, DOC_STATES.DONE);
 
-  // ----- Demo products ------------------------------------------------------
-  for (const product of DEMO_PRODUCTS) {
-    await prisma.product.upsert({
-      where: { sku: product.sku },
-      update: {},
-      create: {
-        sku: product.sku,
-        name: product.name,
-        categoryId: categoryByName[product.category].id,
-        uomId: uomByCode[product.uom].id,
-        costPrice: product.costPrice,
-        reorderMin: product.reorderMin,
-        reorderMax: product.reorderMax,
-      },
+  // Receipt 2 (DONE) - Pune
+  await createReceipt('RCP-DEMO-002', 'Electronics Components Pvt Ltd', whByCode['PUNE-MAIN'], [
+    { sku: 'ELEC-SENSOR-001', quantity: 25, dest: 'P-STORE' },
+    { sku: 'ELEC-RELAY-001', quantity: 50, dest: 'P-STORE' }
+  ], prodBySku, locByCode, DOC_STATES.DONE);
+
+  // Receipt 3 (DONE) - Pune
+  await createReceipt('RCP-DEMO-003', 'Packaging Solutions Ltd', whByCode['PUNE-MAIN'], [
+    { sku: 'PKG-BOX-L', quantity: 200, dest: 'P-STORE' },
+    { sku: 'PKG-BUBBLE-001', quantity: 40, dest: 'P-STORE' },
+    { sku: 'PKG-TAPE-001', quantity: 100, dest: 'P-STORE' }
+  ], prodBySku, locByCode, DOC_STATES.DONE);
+
+  // Receipt 4 (DONE) - Mumbai
+  await createReceipt('RCP-DEMO-004', 'Office Supplies India', whByCode['MUM-DIST'], [
+    { sku: 'OFF-PAPER-001', quantity: 50, dest: 'M-STORE' },
+    { sku: 'SAFE-GLOVE-001', quantity: 80, dest: 'M-STORE' }
+  ], prodBySku, locByCode, DOC_STATES.DONE);
+
+  // Receipt 5 (DRAFT) - Pune
+  await createReceipt('RCP-DEMO-005', 'Tata Steel Supplies', whByCode['PUNE-MAIN'], [
+    { sku: 'RM-COPPER-001', quantity: 20, dest: 'P-STORE' }
+  ], prodBySku, locByCode, DOC_STATES.DRAFT);
+}
+
+async function seedInternalMovements(prodBySku, locByCode) {
+  const createMove = async (ref, sku, fromCode, toCode, qty) => {
+    const existing = await prisma.stockMove.findFirst({ where: { reference: ref } });
+    if (existing) return;
+
+    await prisma.$transaction(async (tx) => {
+      await inventoryService.executeMove(tx, {
+        productId: prodBySku[sku].id,
+        fromLocationId: locByCode[fromCode].id,
+        toLocationId: locByCode[toCode].id,
+        quantity: qty,
+        documentType: DOCUMENT_TYPES.INTERNAL,
+        documentId: crypto.randomUUID(),
+        reference: ref,
+      });
     });
-  }
+  };
 
-  console.log(`Seeding finished. Admin user: ${adminUser.email}`);
-  console.log(`  roles       : ${ROLES.join(', ')}`);
-  console.log(`  permissions : ${PERMISSIONS.length}`);
-  console.log(`  uom         : ${UOMS.length}`);
-  console.log(`  warehouse   : ${warehouse.name} (${DEFAULT_LOCATIONS.length} locations)`);
-  console.log(`  products    : ${DEMO_PRODUCTS.length}`);
+  await createMove('INT-DEMO-001', 'RM-STEEL-001', 'P-STORE', 'P-PROD', 30);
+  await createMove('INT-DEMO-002', 'PKG-BOX-L', 'P-STORE', 'P-PACK', 50);
+  await createMove('INT-DEMO-003', 'PKG-BOX-L', 'P-PACK', 'P-STORE', 10);
+  await createMove('INT-DEMO-004', 'PKG-BUBBLE-001', 'P-STORE', 'P-PACK', 10);
+  
+  // Create low stock situation for sensors & relays by moving them to SCRAP or just using them in Production
+  await createMove('INT-DEMO-005', 'ELEC-SENSOR-001', 'P-STORE', 'P-PROD', 20); // 25 - 20 = 5 left in STORE
+  await createMove('INT-DEMO-006', 'ELEC-RELAY-001', 'P-STORE', 'P-PROD', 42);  // 50 - 42 = 8 left in STORE
+}
+
+async function main() {
+  console.log('Seeding StockPilot Demo Data...');
+
+  const roleByName = await seedRolesAndPermissions();
+  const { whByCode, locByCode } = await seedWarehousesAndLocations();
+  await seedUsers(roleByName, whByCode);
+  const prodBySku = await seedCatalog();
+  
+  await seedReceipts(whByCode, prodBySku, locByCode);
+  await seedInternalMovements(prodBySku, locByCode);
+
+  console.log('Demo Data Seeding Complete.');
 }
 
 main()

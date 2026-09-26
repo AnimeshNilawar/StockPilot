@@ -9,6 +9,7 @@ const productRoutes = require('./product.routes');
 const warehouseRoutes = require('./warehouse.routes');
 const locationRoutes = require('./location.routes');
 const stockRoutes = require('./stock.routes');
+const receiptRoutes = require('./receipt.routes');
 const { prisma } = require('../lib/prisma');
 
 router.get('/health', (req, res) => {
@@ -45,5 +46,6 @@ router.use(productRoutes);
 router.use(warehouseRoutes);
 router.use(locationRoutes);
 router.use(stockRoutes);
+router.use('/receipts', receiptRoutes);
 
 module.exports = router;

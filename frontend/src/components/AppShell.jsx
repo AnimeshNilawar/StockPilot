@@ -15,6 +15,11 @@ const NAV = [
     show: (user) => can.readStock(user) || can.moveStock(user),
   },
   {
+    to: '/receipts',
+    label: 'Receipts',
+    show: (user) => can.createReceipt(user) || can.validateReceipt(user),
+  },
+  {
     to: '/moves',
     label: 'Move history',
     show: (user) => can.readStock(user) || can.moveStock(user),

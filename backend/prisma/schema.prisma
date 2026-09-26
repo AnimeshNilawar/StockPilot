@@ -56,6 +56,7 @@ model Warehouse {
   isActive    Boolean               @default(true) @map("is_active")
   locations   Location[]
   userAccess  UserWarehouseAccess[]
+  receipts    Receipt[]
   createdAt   DateTime              @default(now())
   updatedAt   DateTime              @updatedAt
 }
@@ -155,6 +156,7 @@ model Product {
   isActive    Boolean    @default(true) @map("is_active")
   quants      StockQuant[]
   moves       StockMove[]
+  receiptLines ReceiptLine[]
   createdAt   DateTime   @default(now()) @map("created_at")
   updatedAt   DateTime   @updatedAt @map("updated_at")
 
@@ -180,6 +182,7 @@ model Location {
   quantsHere  StockQuant[]
   movesFrom   StockMove[]   @relation("MoveFrom")
   movesTo     StockMove[]   @relation("MoveTo")
+  receiptLines ReceiptLine[]
   createdAt   DateTime      @default(now()) @map("created_at")
   updatedAt   DateTime      @updatedAt @map("updated_at")
 
@@ -246,4 +249,37 @@ model IdempotencyKey {
 
   @@index([expiresAt])
   @@map("idempotency_keys")
+}
+
+// ---------- Receipts (Phase 3) ----------
+
+model Receipt {
+  id            String   @id @default(uuid())
+  reference     String   @unique
+  supplier      String
+  warehouseId   String   @map("warehouse_id")
+  warehouse     Warehouse @relation(fields: [warehouseId], references: [id])
+  state         String   @default("DRAFT") // DRAFT | DONE
+  createdById   String?  @map("created_by")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  lines         ReceiptLine[]
+
+  @@index([warehouseId, state])
+  @@map("receipts")
+}
+
+model ReceiptLine {
+  id                    String   @id @default(uuid())
+  receiptId             String   @map("receipt_id")
+  receipt               Receipt  @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  productId             String   @map("product_id")
+  product               Product  @relation(fields: [productId], references: [id])
+  quantity              Decimal  @db.Decimal(14, 4)
+  destinationLocationId String   @map("destination_location_id")
+  destinationLocation   Location @relation(fields: [destinationLocationId], references: [id])
+
+  @@index([receiptId])
+  @@map("receipt_lines")
 }

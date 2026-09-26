@@ -28,7 +28,7 @@ describe('RBAC & Warehouse Access API', () => {
 
     const staffUser = await prisma.user.create({
       data: {
-        email: 'staff@stockpilot.local',
+        email: 'staff_' + Date.now() + '@stockpilot.local',
         passwordHash: pwHash,
         name: 'Staff User',
         roleId: staffRole.id,

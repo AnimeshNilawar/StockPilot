@@ -282,6 +282,37 @@ npx prisma migrate dev
 
 Seed Database (Creates default roles and Admin account):
 ```bash
+npx prisma db seed
+```
+
+## Demo Credentials
+
+The following demo accounts are provided for **DEVELOPMENT / DEMO ONLY**:
+
+- **Admin**: `admin@stockpilot.local` / `Admin@12345`
+- **Inventory Manager**: `manager@stockpilot.local` / `Manager@12345`
+- **Warehouse Staff**: `staff@stockpilot.local` / `Staff@12345`
+
+Do not use these credentials in a production environment.
+
+## Demo Data
+
+To populate the database with a realistic, idempotent demo dataset containing products, warehouses, and generated stock movements:
+
+```bash
 cd backend
 npx prisma db seed
 ```
+
+You can verify the seeded data by running:
+
+```bash
+cd backend
+npm run db:verify-demo
+```
+
+### Main Scenarios Available:
+1. **Authentication & RBAC**: Log in with different roles to verify Dashboard access and Warehouse isolation (Staff can only see Pune Main Warehouse).
+2. **Receipt Validations**: Navigate to Receipts, find the `DRAFT` receipt, and validate it to see stock levels instantly increase.
+3. **Idempotency**: Observe how double-validation requests securely return cached responses without duplicating `StockMove` records.
+4. **Move History**: Check the Move History screen to see generated internal transfers and completed receipts.

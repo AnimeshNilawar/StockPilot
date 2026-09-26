@@ -7,6 +7,8 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "test": "jest",
+    "db:seed:demo": "npx prisma db seed",
+    "db:verify-demo": "node scripts/verify-demo.js",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

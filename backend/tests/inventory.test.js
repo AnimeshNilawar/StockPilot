@@ -586,6 +586,10 @@ describe('concurrency', () => {
   }, 30000);
 
   it('never loses an update under parallel opposing internal moves', async () => {
+    // Both sides need stock so opposing moves don't randomly fail on negative-stock 
+    // checks due to execution interleaving.
+    await receiveInto(race.id, loc.production, 20);
+
     // 10 moves of 2 units each way, interleaved: conservation must hold exactly.
     const pending = [];
     for (let i = 0; i < 10; i += 1) {

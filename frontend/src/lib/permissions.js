@@ -41,6 +41,8 @@ export const can = {
   readStock: (user) => hasPermission(user, 'stock.read'),
   moveStock: (user) => hasPermission(user, 'stock.move'),
   viewMoveHistory: (user) => hasPermission(user, 'move_history.view'),
+  createReceipt: (user) => hasPermission(user, 'receipt.create'),
+  validateReceipt: (user) => hasPermission(user, 'receipt.validate'),
 };
 
 /** The warehouse ids a user may filter by, or `null` when unrestricted. */

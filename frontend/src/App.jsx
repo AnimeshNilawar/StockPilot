@@ -11,6 +11,8 @@ import { WarehousesPage } from './pages/WarehousesPage';
 import { LocationsPage } from './pages/LocationsPage';
 import { StockBalancesPage } from './pages/StockBalancesPage';
 import { MoveHistoryPage } from './pages/MoveHistoryPage';
+import { ReceiptsPage } from './pages/ReceiptsPage';
+import { ReceiptDetailPage } from './pages/ReceiptDetailPage';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastProvider } from './components/Toast';
@@ -38,6 +40,8 @@ function App() {
               <Route path="/locations" element={<LocationsPage />} />
               <Route path="/stock" element={<StockBalancesPage />} />
               <Route path="/moves" element={<MoveHistoryPage />} />
+              <Route path="/receipts" element={<ReceiptsPage />} />
+              <Route path="/receipts/:id" element={<ReceiptDetailPage />} />
             </Route>
           </Routes>
         </BrowserRouter>
