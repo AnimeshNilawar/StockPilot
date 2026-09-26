@@ -1,0 +1,107 @@
+name: CI
+
+# The backend tests run against a real PostgreSQL instance rather than a mock:
+# row locks, compare-and-set writes, unique constraints and NUMERIC arithmetic
+# only exist in the database, so a CI run without one would prove very little.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (test, lint, prisma)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: stockpilot
+          POSTGRES_PASSWORD: stockpilot_password
+          POSTGRES_DB: stockpilot_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U stockpilot -d stockpilot_db"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    defaults:
+      run:
+        working-directory: backend
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://stockpilot:stockpilot_password@127.0.0.1:5432/stockpilot_db?schema=public
+      DIRECT_URL: postgresql://stockpilot:stockpilot_password@127.0.0.1:5432/stockpilot_db?schema=public
+      JWT_SECRET: ci-only-not-a-real-secret
+      OTP_DELIVERY_MODE: console
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate schema
+        run: npx prisma validate
+
+      # Applying the migrations to an empty database is the check that they are
+      # self-contained and correctly ordered, which a developer's already-migrated
+      # database cannot tell you.
+      - name: Apply migrations
+        run: npx prisma migrate deploy
+
+      - name: Generate client
+        run: npx prisma generate
+
+      # The suites create their own warehouses and products, but they look their
+      # roles and permissions up by name, so the roles have to exist first.
+      - name: Seed roles and demo data
+        run: npx prisma db seed
+
+      - name: Lint
+        run: npm run lint
+
+      # Serialised: the suites share one database, and running them concurrently
+      # would have them truncating and seeding each other's fixtures.
+      - name: Test
+        run: npm test -- --runInBand
+
+  frontend:
+    name: Frontend (lint, build)
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
