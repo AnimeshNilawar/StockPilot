@@ -57,9 +57,11 @@ model Warehouse {
   locations  Location[]
   userAccess UserWarehouseAccess[]
   receipts   Receipt[]
-  deliveries Delivery[]
-  createdAt  DateTime              @default(now())
-  updatedAt  DateTime              @updatedAt
+  deliveries        Delivery[]
+  internalTransfers InternalTransfer[]
+  adjustments       Adjustment[]
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
 }
 
 model UserWarehouseAccess {
@@ -157,10 +159,12 @@ model Product {
   isActive      Boolean        @default(true) @map("is_active")
   quants        StockQuant[]
   moves         StockMove[]
-  receiptLines  ReceiptLine[]
-  deliveryLines DeliveryLine[]
-  createdAt     DateTime       @default(now()) @map("created_at")
-  updatedAt     DateTime       @updatedAt @map("updated_at")
+  receiptLines    ReceiptLine[]
+  deliveryLines   DeliveryLine[]
+  transferLines   InternalTransferLine[]
+  adjustmentLines AdjustmentLine[]
+  createdAt       DateTime               @default(now()) @map("created_at")
+  updatedAt       DateTime               @updatedAt @map("updated_at")
 
   @@index([categoryId])
   @@index([uomId])
@@ -170,24 +174,27 @@ model Product {
 // ---------- Warehouse Locations ----------
 
 model Location {
-  id            String         @id @default(uuid())
-  warehouseId   String         @map("warehouse_id")
-  warehouse     Warehouse      @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
-  parentId      String?        @map("parent_id")
-  parent        Location?      @relation("LocationTree", fields: [parentId], references: [id])
-  children      Location[]     @relation("LocationTree")
-  name          String
-  shortCode     String         @map("short_code")
+  id              String                 @id @default(uuid())
+  warehouseId     String                 @map("warehouse_id")
+  warehouse       Warehouse              @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  parentId        String?                @map("parent_id")
+  parent          Location?              @relation("LocationTree", fields: [parentId], references: [id])
+  children        Location[]             @relation("LocationTree")
+  name            String
+  shortCode       String                 @map("short_code")
   // INTERNAL | VENDOR | CUSTOMER | PRODUCTION | SCRAP | TRANSIT
-  type          String         @default("INTERNAL")
-  isActive      Boolean        @default(true) @map("is_active")
-  quantsHere    StockQuant[]
-  movesFrom     StockMove[]    @relation("MoveFrom")
-  movesTo       StockMove[]    @relation("MoveTo")
-  receiptLines  ReceiptLine[]
-  deliveryLines DeliveryLine[]
-  createdAt     DateTime       @default(now()) @map("created_at")
-  updatedAt     DateTime       @updatedAt @map("updated_at")
+  type            String                 @default("INTERNAL")
+  isActive        Boolean                @default(true) @map("is_active")
+  quantsHere      StockQuant[]
+  movesFrom       StockMove[]            @relation("MoveFrom")
+  movesTo         StockMove[]            @relation("MoveTo")
+  receiptLines    ReceiptLine[]
+  deliveryLines   DeliveryLine[]
+  transfersFrom   InternalTransferLine[] @relation("TransferSource")
+  transfersTo     InternalTransferLine[] @relation("TransferDestination")
+  adjustmentLines AdjustmentLine[]
+  createdAt       DateTime               @default(now()) @map("created_at")
+  updatedAt       DateTime               @updatedAt @map("updated_at")
 
   @@unique([warehouseId, shortCode])
   @@index([warehouseId, type])
@@ -344,4 +351,74 @@ model DeliveryLine {
 
   @@index([deliveryId])
   @@map("delivery_lines")
+}
+
+// ---------- Internal Transfers (Phase 6) ----------
+
+model InternalTransfer {
+  id          String                 @id @default(uuid())
+  reference   String                 @unique
+  warehouseId String                 @map("warehouse_id")
+  warehouse   Warehouse              @relation(fields: [warehouseId], references: [id])
+  state       String                 @default("DRAFT") // DRAFT | WAITING | READY | DONE | CANCELLED
+  createdById String?                @map("created_by")
+  createdAt   DateTime               @default(now()) @map("created_at")
+  updatedAt   DateTime               @updatedAt @map("updated_at")
+
+  lines       InternalTransferLine[]
+
+  @@index([warehouseId, state])
+  @@map("internal_transfers")
+}
+
+model InternalTransferLine {
+  id                    String           @id @default(uuid())
+  transferId            String           @map("transfer_id")
+  transfer              InternalTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  productId             String           @map("product_id")
+  product               Product          @relation(fields: [productId], references: [id])
+  sourceLocationId      String           @map("source_location_id")
+  sourceLocation        Location         @relation("TransferSource", fields: [sourceLocationId], references: [id])
+  destinationLocationId String           @map("destination_location_id")
+  destinationLocation   Location         @relation("TransferDestination", fields: [destinationLocationId], references: [id])
+  quantity              Decimal          @db.Decimal(14, 4)
+
+  @@index([transferId])
+  @@map("internal_transfer_lines")
+}
+
+// ---------- Inventory Adjustments (Phase 6) ----------
+
+model Adjustment {
+  id            String           @id @default(uuid())
+  reference     String           @unique
+  warehouseId   String           @map("warehouse_id")
+  warehouse     Warehouse        @relation(fields: [warehouseId], references: [id])
+  state         String           @default("DRAFT") // DRAFT | WAITING | READY | DONE | CANCELLED
+  reason        String?
+  createdById   String?          @map("created_by")
+  validatedById String?          @map("validated_by")
+  createdAt     DateTime         @default(now()) @map("created_at")
+  updatedAt     DateTime         @updatedAt @map("updated_at")
+
+  lines         AdjustmentLine[]
+
+  @@index([warehouseId, state])
+  @@map("adjustments")
+}
+
+model AdjustmentLine {
+  id              String     @id @default(uuid())
+  adjustmentId    String     @map("adjustment_id")
+  adjustment      Adjustment @relation(fields: [adjustmentId], references: [id], onDelete: Cascade)
+  productId       String     @map("product_id")
+  product         Product    @relation(fields: [productId], references: [id])
+  locationId      String     @map("location_id")
+  location        Location   @relation(fields: [locationId], references: [id])
+  systemQuantity  Decimal    @map("system_quantity") @db.Decimal(14, 4)
+  countedQuantity Decimal    @map("counted_quantity") @db.Decimal(14, 4)
+  difference      Decimal    @db.Decimal(14, 4)
+
+  @@index([adjustmentId])
+  @@map("adjustment_lines")
 }

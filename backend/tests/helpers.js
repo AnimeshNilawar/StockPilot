@@ -141,7 +141,15 @@ async function removeUser(userId) {
  * so this only ever holds rows the calling suite created — which is what makes
  * it safe to delete by id while other suites run in parallel.
  */
-const tracked = { partners: [], warehouses: [], products: [], receipts: [], deliveries: [] };
+const tracked = {
+  partners: [],
+  warehouses: [],
+  products: [],
+  receipts: [],
+  deliveries: [],
+  transfers: [],
+  adjustments: [],
+};
 
 const track = (kind, record) => {
   tracked[kind].push(record.id);
@@ -170,12 +178,21 @@ const createTrackedReceipt = async (data) =>
 const createTrackedDelivery = async (data) =>
   track('deliveries', await prisma.delivery.create({ data }));
 
+const createTrackedTransfer = async (data) =>
+  track('transfers', await prisma.internalTransfer.create({ data }));
+
+const createTrackedAdjustment = async (data) =>
+  track('adjustments', await prisma.adjustment.create({ data }));
+
 /**
  * Registers a row a suite created indirectly — through the HTTP API, say — so
  * `cleanupFixtures` still removes it. Only the id is needed.
  */
 const trackFixture = (kind, record) => {
-  if (record && record.id) track(kind, record);
+  if (record && record.id) {
+    if (!tracked[kind]) tracked[kind] = [];
+    track(kind, record);
+  }
   return record;
 };
 
@@ -209,6 +226,22 @@ async function cleanupFixtures() {
     () => prisma.delivery.deleteMany({ where: { id: { in: tracked.deliveries } } }),
     () => prisma.deliveryLine.deleteMany({ where: { sourceLocationId: { in: locationIds } } }),
     () => prisma.delivery.deleteMany({ where: { warehouseId: { in: warehouseIds } } }),
+    () => prisma.internalTransferLine.deleteMany({ where: { transferId: { in: tracked.transfers } } }),
+    () => prisma.internalTransfer.deleteMany({ where: { id: { in: tracked.transfers } } }),
+    () =>
+      prisma.internalTransferLine.deleteMany({
+        where: {
+          OR: [
+            { sourceLocationId: { in: locationIds } },
+            { destinationLocationId: { in: locationIds } },
+          ],
+        },
+      }),
+    () => prisma.internalTransfer.deleteMany({ where: { warehouseId: { in: warehouseIds } } }),
+    () => prisma.adjustmentLine.deleteMany({ where: { adjustmentId: { in: tracked.adjustments } } }),
+    () => prisma.adjustment.deleteMany({ where: { id: { in: tracked.adjustments } } }),
+    () => prisma.adjustmentLine.deleteMany({ where: { locationId: { in: locationIds } } }),
+    () => prisma.adjustment.deleteMany({ where: { warehouseId: { in: warehouseIds } } }),
     () =>
       prisma.stockMove.deleteMany({
         where: {
@@ -250,9 +283,12 @@ module.exports = {
   createTrackedWarehouseWithLocations,
   createTrackedReceipt,
   createTrackedDelivery,
+  createTrackedTransfer,
+  createTrackedAdjustment,
   trackFixture,
   auth,
   removeUser,
   cleanupFixtures,
   LOCATION_TYPES,
 };
+

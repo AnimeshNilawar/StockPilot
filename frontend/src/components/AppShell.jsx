@@ -25,6 +25,16 @@ const NAV = [
     show: (user) => can.createDelivery(user) || can.pickDelivery(user) || can.validateDelivery(user),
   },
   {
+    to: '/transfers',
+    label: 'Internal Transfers',
+    show: (user) => can.createTransfer(user) || can.validateTransfer(user) || can.readStock(user),
+  },
+  {
+    to: '/adjustments',
+    label: 'Adjustments',
+    show: (user) => can.createAdjustment(user) || can.validateAdjustment(user) || can.readStock(user),
+  },
+  {
     to: '/moves',
     label: 'Move history',
     show: (user) => can.readStock(user) || can.moveStock(user),

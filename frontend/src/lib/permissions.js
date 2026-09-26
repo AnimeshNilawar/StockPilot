@@ -50,6 +50,10 @@ export const can = {
   // the claim on real stock, so the UI shows it as its own decision.
   pickDelivery: (user) => hasPermission(user, 'delivery.pick'),
   validateDelivery: (user) => hasPermission(user, 'delivery.validate'),
+  createTransfer: (user) => hasPermission(user, 'internal_transfer.create'),
+  validateTransfer: (user) => hasPermission(user, 'internal_transfer.validate'),
+  createAdjustment: (user) => hasPermission(user, 'adjustment.create'),
+  validateAdjustment: (user) => hasPermission(user, 'adjustment.validate'),
 };
 
 /** The warehouse ids a user may filter by, or `null` when unrestricted. */

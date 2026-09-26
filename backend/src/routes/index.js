@@ -12,6 +12,8 @@ const stockRoutes = require('./stock.routes');
 const receiptRoutes = require('./receipt.routes');
 const deliveryRoutes = require('./delivery.routes');
 const partnerRoutes = require('./partner.routes');
+const transferRoutes = require('./transfer.routes');
+const adjustmentRoutes = require('./adjustment.routes');
 const { prisma } = require('../lib/prisma');
 
 router.get('/health', (req, res) => {
@@ -51,5 +53,9 @@ router.use(stockRoutes);
 router.use('/receipts', receiptRoutes);
 router.use('/deliveries', deliveryRoutes);
 router.use('/partners', partnerRoutes);
+router.use('/internal-transfers', transferRoutes);
+router.use('/transfers', transferRoutes);
+router.use('/adjustments', adjustmentRoutes);
 
 module.exports = router;
+

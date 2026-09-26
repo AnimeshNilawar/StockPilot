@@ -688,6 +688,238 @@ async function seedInternalMovements(prodBySku, locByCode) {
   await createMove('INT-DEMO-006', 'ELEC-RELAY-001', 'P-STORE', 'P-PROD', 42); // 50 - 42 = 8 left in STORE
 }
 
+async function createInternalTransfer(
+  reference,
+  warehouse,
+  linesData,
+  prodBySku,
+  locByCode,
+  state = DOC_STATES.DONE,
+) {
+  const existing = await prisma.internalTransfer.findUnique({ where: { reference } });
+  if (existing) return existing;
+
+  const transfer = await prisma.internalTransfer.create({
+    data: {
+      reference,
+      warehouseId: warehouse.id,
+      state: DOC_STATES.DRAFT,
+      lines: {
+        create: linesData.map((l) => ({
+          productId: prodBySku[l.sku].id,
+          quantity: l.quantity,
+          sourceLocationId: locByCode[l.src].id,
+          destinationLocationId: locByCode[l.dest].id,
+        })),
+      },
+    },
+    include: { lines: true },
+  });
+
+  if (state === DOC_STATES.DRAFT) return transfer;
+  if (state === DOC_STATES.READY) {
+    return prisma.internalTransfer.update({
+      where: { id: transfer.id },
+      data: { state: DOC_STATES.READY },
+    });
+  }
+  if (state === DOC_STATES.CANCELLED) {
+    return prisma.internalTransfer.update({
+      where: { id: transfer.id },
+      data: { state: DOC_STATES.CANCELLED },
+    });
+  }
+
+  if (state === DOC_STATES.DONE) {
+    await prisma.$transaction(async (tx) => {
+      for (const line of transfer.lines) {
+        await inventoryService.executeMove(tx, {
+          productId: line.productId,
+          fromLocationId: line.sourceLocationId,
+          toLocationId: line.destinationLocationId,
+          quantity: line.quantity,
+          documentType: DOCUMENT_TYPES.INTERNAL,
+          documentId: transfer.id,
+          reference: transfer.reference,
+        });
+      }
+      await tx.internalTransfer.update({
+        where: { id: transfer.id },
+        data: { state: DOC_STATES.DONE },
+      });
+    });
+  }
+
+  return transfer;
+}
+
+async function createAdjustment(
+  reference,
+  warehouse,
+  reason,
+  linesData,
+  prodBySku,
+  locByCode,
+  state = DOC_STATES.DONE,
+) {
+  const existing = await prisma.adjustment.findUnique({ where: { reference } });
+  if (existing) return existing;
+
+  const processedLines = [];
+  for (const l of linesData) {
+    const prod = prodBySku[l.sku];
+    const loc = locByCode[l.loc];
+    const quant = await prisma.stockQuant.findUnique({
+      where: { productId_locationId: { productId: prod.id, locationId: loc.id } },
+    });
+    const systemQuantity = quant ? Number(quant.onHand) : 0;
+    const countedQuantity = Number(l.counted);
+    processedLines.push({
+      productId: prod.id,
+      locationId: loc.id,
+      systemQuantity,
+      countedQuantity,
+      difference: countedQuantity - systemQuantity,
+    });
+  }
+
+  const adjustment = await prisma.adjustment.create({
+    data: {
+      reference,
+      warehouseId: warehouse.id,
+      reason,
+      state: DOC_STATES.DRAFT,
+      lines: {
+        create: processedLines,
+      },
+    },
+    include: { lines: true },
+  });
+
+  if (state === DOC_STATES.DRAFT) return adjustment;
+  if (state === DOC_STATES.READY) {
+    return prisma.adjustment.update({
+      where: { id: adjustment.id },
+      data: { state: DOC_STATES.READY },
+    });
+  }
+  if (state === DOC_STATES.CANCELLED) {
+    return prisma.adjustment.update({
+      where: { id: adjustment.id },
+      data: { state: DOC_STATES.CANCELLED },
+    });
+  }
+
+  if (state === DOC_STATES.DONE) {
+    await prisma.$transaction(async (tx) => {
+      const scrapLoc = await tx.location.findFirst({
+        where: { warehouseId: warehouse.id, type: LOCATION_TYPES.SCRAP, isActive: true },
+      });
+
+      for (const line of adjustment.lines) {
+        const diff = Number(line.difference);
+        if (diff > 0) {
+          // Write-back: SCRAP -> INTERNAL (+diff)
+          await inventoryService.executeMove(tx, {
+            productId: line.productId,
+            fromLocationId: scrapLoc.id,
+            toLocationId: line.locationId,
+            quantity: diff,
+            documentType: DOCUMENT_TYPES.ADJUSTMENT,
+            documentId: adjustment.id,
+            reference: adjustment.reference,
+          });
+        } else if (diff < 0) {
+          // Write-off: INTERNAL -> SCRAP (-diff)
+          await inventoryService.executeMove(tx, {
+            productId: line.productId,
+            fromLocationId: line.locationId,
+            toLocationId: scrapLoc.id,
+            quantity: Math.abs(diff),
+            documentType: DOCUMENT_TYPES.ADJUSTMENT,
+            documentId: adjustment.id,
+            reference: adjustment.reference,
+          });
+        }
+      }
+
+      await tx.adjustment.update({
+        where: { id: adjustment.id },
+        data: { state: DOC_STATES.DONE },
+      });
+    });
+  }
+
+  return adjustment;
+}
+
+async function seedInternalTransfers(whByCode, prodBySku, locByCode) {
+  // Transfer 1 (DONE) - Pune: 10 kg Steel from STORE to PROD
+  await createInternalTransfer(
+    'TRF-DEMO-001',
+    whByCode['PUNE-MAIN'],
+    [{ sku: 'RM-STEEL-001', quantity: 10, src: 'P-STORE', dest: 'P-PROD' }],
+    prodBySku,
+    locByCode,
+    DOC_STATES.DONE,
+  );
+
+  // Transfer 2 (READY) - Pune: 5 units Cardboard Boxes from STORE to PACK
+  await createInternalTransfer(
+    'TRF-DEMO-002',
+    whByCode['PUNE-MAIN'],
+    [{ sku: 'PKG-BOX-L', quantity: 5, src: 'P-STORE', dest: 'P-PACK' }],
+    prodBySku,
+    locByCode,
+    DOC_STATES.READY,
+  );
+
+  // Transfer 3 (DRAFT) - Mumbai: 5 packs Printer Paper from STORE to PACK
+  await createInternalTransfer(
+    'TRF-DEMO-003',
+    whByCode['MUM-DIST'],
+    [{ sku: 'OFF-PAPER-001', quantity: 5, src: 'M-STORE', dest: 'M-PACK' }],
+    prodBySku,
+    locByCode,
+    DOC_STATES.DRAFT,
+  );
+}
+
+async function seedAdjustments(whByCode, prodBySku, locByCode) {
+  // Adjustment 1 (DONE, Positive: +5) - Pune: Bubble wrap roll count 30 -> 35
+  await createAdjustment(
+    'ADJ-DEMO-001',
+    whByCode['PUNE-MAIN'],
+    'Annual Physical Inventory Count (Surplus Found)',
+    [{ sku: 'PKG-BUBBLE-001', loc: 'P-STORE', counted: 35 }],
+    prodBySku,
+    locByCode,
+    DOC_STATES.DONE,
+  );
+
+  // Adjustment 2 (DONE, Negative: -5) - Pune: Packing tape count 100 -> 95
+  await createAdjustment(
+    'ADJ-DEMO-002',
+    whByCode['PUNE-MAIN'],
+    'Damaged Roll Write-off',
+    [{ sku: 'PKG-TAPE-001', loc: 'P-STORE', counted: 95 }],
+    prodBySku,
+    locByCode,
+    DOC_STATES.DONE,
+  );
+
+  // Adjustment 3 (READY) - Pune: Stainless Steel Sheet count 85 -> 90 (+5 preview)
+  await createAdjustment(
+    'ADJ-DEMO-003',
+    whByCode['PUNE-MAIN'],
+    'Monthly Spot Check',
+    [{ sku: 'RM-STEEL-001', loc: 'P-STORE', counted: 90 }],
+    prodBySku,
+    locByCode,
+    DOC_STATES.READY,
+  );
+}
+
 async function main() {
   console.log('Seeding StockPilot Demo Data...');
 
@@ -700,6 +932,8 @@ async function main() {
   await seedReceipts(whByCode, prodBySku, locByCode, partnerByName);
   await seedInternalMovements(prodBySku, locByCode);
   await seedDeliveries(whByCode, prodBySku, locByCode, partnerByName);
+  await seedInternalTransfers(whByCode, prodBySku, locByCode);
+  await seedAdjustments(whByCode, prodBySku, locByCode);
 
   console.log('Demo Data Seeding Complete.');
 }
@@ -712,3 +946,4 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
+

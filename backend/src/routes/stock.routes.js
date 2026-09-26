@@ -15,6 +15,12 @@ router.get(
   stockController.listQuants.bind(stockController),
 );
 router.get(
+  '/stock/quants',
+  requireAuth,
+  validate({ query: schemas.quantList }),
+  stockController.listQuants.bind(stockController),
+);
+router.get(
   '/stock/summary',
   requireAuth,
   validate({ query: schemas.stockSummary }),

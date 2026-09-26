@@ -15,6 +15,10 @@ import { ReceiptsPage } from './pages/ReceiptsPage';
 import { ReceiptDetailPage } from './pages/ReceiptDetailPage';
 import { DeliveriesPage } from './pages/DeliveriesPage';
 import { DeliveryDetailPage } from './pages/DeliveryDetailPage';
+import { InternalTransfersPage } from './pages/InternalTransfersPage';
+import { InternalTransferDetailPage } from './pages/InternalTransferDetailPage';
+import { AdjustmentsPage } from './pages/AdjustmentsPage';
+import { AdjustmentDetailPage } from './pages/AdjustmentDetailPage';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastProvider } from './components/Toast';
@@ -46,6 +50,10 @@ function App() {
               <Route path="/receipts/:id" element={<ReceiptDetailPage />} />
               <Route path="/deliveries" element={<DeliveriesPage />} />
               <Route path="/deliveries/:id" element={<DeliveryDetailPage />} />
+              <Route path="/transfers" element={<InternalTransfersPage />} />
+              <Route path="/transfers/:id" element={<InternalTransferDetailPage />} />
+              <Route path="/adjustments" element={<AdjustmentsPage />} />
+              <Route path="/adjustments/:id" element={<AdjustmentDetailPage />} />
             </Route>
           </Routes>
         </BrowserRouter>

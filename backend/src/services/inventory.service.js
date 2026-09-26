@@ -159,7 +159,11 @@ const ledgerBalances = (productId) => {
       // Only stock-holding locations carry a balance. A receipt's VENDOR side and
       // a delivery's CUSTOMER side are boundary nodes: the engine never creates
       // a quant row for them, so the replay must skip them too.
-      if (move.fromLocation && isStockHolding(move.fromLocation.type)) {
+      if (
+        move.fromLocation &&
+        isStockHolding(move.fromLocation.type) &&
+        !(move.fromLocation.type === LOCATION_TYPES.SCRAP && move.documentType === DOCUMENT_TYPES.ADJUSTMENT)
+      ) {
         add(move.fromLocationId, quantity.negated());
       }
       if (move.toLocation && isStockHolding(move.toLocation.type)) {
@@ -438,7 +442,9 @@ const executeMove = async (tx, params) => {
 
   assertMoveAllowed({ fromLocation, toLocation, documentType });
 
-  const fromIsStock = isStockHolding(fromLocation.type);
+  const fromIsStock =
+    isStockHolding(fromLocation.type) &&
+    !(fromLocation.type === LOCATION_TYPES.SCRAP && documentType === DOCUMENT_TYPES.ADJUSTMENT);
   const toIsStock = isStockHolding(toLocation.type);
 
   // Locks are taken in a deterministic order to avoid deadlocks.

@@ -7,269 +7,469 @@ const {
   auth,
   unique,
   createUserWithToken,
-  createTrackedProduct,
-  createTrackedWarehouseWithLocations,
+  createWarehouseWithLocations,
+  createProduct,
+  trackFixture,
   cleanupFixtures,
 } = require('./helpers');
+const { DOC_STATES } = require('../src/domain/documentState');
 const { DOCUMENT_TYPES } = require('../src/domain/documentType');
 const { LOCATION_TYPES } = require('../src/domain/location');
 
 const dec = (v) => new Prisma.Decimal(v);
-const quantOnHand = (productId, locationId) =>
-  prisma.stockQuant
-    .findUnique({ where: { productId_locationId: { productId, locationId } } })
-    .then((q) => (q ? dec(q.onHand).toString() : '0'));
 
-/**
- * An adjustment is a stock *correction*, so it may only run between ordinary
- * stock and the scrap bin. These tests pin that rule down, because the looser
- * "must touch stock somehow" check let a transfer masquerade as a correction.
- */
-describe('adjustment location rules', () => {
-  let manager;
-  let warehouse;
-  let loc;
-  let product;
+describe('inventory adjustments & stock counts', () => {
+  let manager, staff, otherStaff, admin, unprivileged;
+  let warehouse, loc, otherWarehouse, otherLoc;
+  let product, product2;
 
   beforeAll(async () => {
     manager = await createUserWithToken('INVENTORY_MANAGER');
+    staff = await createUserWithToken('WAREHOUSE_STAFF');
+    otherStaff = await createUserWithToken('WAREHOUSE_STAFF');
+    admin = await createUserWithToken('ADMIN');
 
-    const wh = await createTrackedWarehouseWithLocations();
-    warehouse = wh.warehouse;
-    // The engine works with identifiers, not location records.
-    loc = Object.fromEntries(Object.entries(wh.locations).map(([key, record]) => [key, record.id]));
-
-    // A second scrap bin, so scrap-to-scrap has a destination to move into.
-    // It lives in the tracked warehouse, so cleanupFixtures takes it with it.
-    const scrapYard = await prisma.location.create({
-      data: {
-        warehouseId: warehouse.id,
-        name: 'Scrap Yard',
-        shortCode: 'SCRAP-YARD',
-        type: LOCATION_TYPES.SCRAP,
-      },
+    await prisma.role.upsert({
+      where: { name: 'TEST_NO_PERMS_ADJUSTMENT' },
+      update: {},
+      create: { name: 'TEST_NO_PERMS_ADJUSTMENT' },
     });
-    loc.scrapYard = scrapYard.id;
+    unprivileged = await createUserWithToken('TEST_NO_PERMS_ADJUSTMENT');
 
-    await prisma.userWarehouseAccess.create({
-      data: { userId: manager.user.id, warehouseId: warehouse.id },
-    });
+    product = await createProduct();
+    product2 = await createProduct();
+
+    const wh1 = await createWarehouseWithLocations();
+    warehouse = wh1.warehouse;
+    loc = wh1.locations;
+
+    const wh2 = await createWarehouseWithLocations();
+    otherWarehouse = wh2.warehouse;
+    otherLoc = wh2.locations;
+
+    for (const [user, wh] of [
+      [staff, warehouse],
+      [otherStaff, otherWarehouse],
+      [manager, warehouse],
+    ]) {
+      await prisma.userWarehouseAccess.create({
+        data: { userId: user.user.id, warehouseId: wh.id },
+      });
+    }
   });
 
   afterAll(async () => {
     await cleanupFixtures();
+    for (const user of [unprivileged, manager, staff, otherStaff, admin]) {
+      if (user?.user?.id) await prisma.user.delete({ where: { id: user.user.id } });
+    }
+    await prisma.role.delete({ where: { name: 'TEST_NO_PERMS_ADJUSTMENT' } }).catch(() => {});
     await prisma.$disconnect();
   });
 
-  /** Puts stock on hand at a location through a vendor receipt. */
-  const receive = (locationId, qty) =>
-    prisma.$transaction((tx) =>
-      inventoryService.executeMove(tx, {
-        productId: product.id,
-        fromLocationId: loc.vendor,
-        toLocationId: locationId,
-        quantity: dec(qty),
-        documentType: DOCUMENT_TYPES.RECEIPT,
-        documentId: `seed:${unique()}`,
-        reference: `SEED-${unique()}`,
-      }),
-    );
+  const stock = async (productId, locationId, onHand, reservedQuantity = '0.0000') => {
+    await prisma.stockQuant.upsert({
+      where: { productId_locationId: { productId, locationId } },
+      update: { onHand: dec(onHand), reservedQuantity: dec(reservedQuantity) },
+      create: { productId, locationId, onHand: dec(onHand), reservedQuantity: dec(reservedQuantity) },
+    });
+    return prisma.stockQuant.findUnique({
+      where: { productId_locationId: { productId, locationId } },
+    });
+  };
 
-  const postMove = (body) =>
+  const quantOf = (productId, locationId) =>
+    prisma.stockQuant.findUnique({ where: { productId_locationId: { productId, locationId } } });
+
+  const body = (overrides = {}) => ({
+    warehouseId: warehouse.id,
+    reason: 'Routine Cycle Count',
+    lines: [
+      {
+        productId: product.id,
+        locationId: loc.store.id,
+        countedQuantity: '85.0000',
+      },
+    ],
+    ...overrides,
+  });
+
+  const createAdjustment = async (token, overrides = {}) => {
+    const res = await request(app)
+      .post('/api/v1/adjustments')
+      .set(auth(token))
+      .send(body(overrides));
+    expect(res.status).toBe(201);
+    return trackFixture('adjustments', res.body.data);
+  };
+
+  const validate = (token, id, key = unique('key')) =>
     request(app)
-      .post('/api/v1/moves')
-      .set(auth(manager.token))
-      .set('Idempotency-Key', unique('adj'))
-      .send(body);
+      .post(`/api/v1/adjustments/${id}/validate`)
+      .set(auth(token))
+      .set('Idempotency-Key', key);
 
-  /** A fresh product per test keeps stock balances independent. */
-  beforeEach(async () => {
-    product = await createTrackedProduct();
-    await receive(loc.store, 100);
-  });
+  describe('creation & systemQuantity capture', () => {
+    it('captures systemQuantity from current StockQuant and calculates difference', async () => {
+      await stock(product.id, loc.store.id, '80.0000', '0.0000');
 
-  describe('allowed shapes', () => {
-    it('posts a write-off from stock to scrap', async () => {
-      const res = await postMove({
-        productId: product.id,
-        fromLocationId: loc.store,
-        toLocationId: loc.scrap,
-        quantity: '30',
-        documentType: DOCUMENT_TYPES.ADJUSTMENT,
-        reason: 'Damaged in transit',
-      });
-
-      expect(res.status).toBe(201);
-      expect(await quantOnHand(product.id, loc.store)).toBe('70');
-      expect(await quantOnHand(product.id, loc.scrap)).toBe('30');
-    });
-
-    it('posts a write-back from scrap to stock', async () => {
-      await postMove({
-        productId: product.id,
-        fromLocationId: loc.store,
-        toLocationId: loc.scrap,
-        quantity: '20',
-        documentType: DOCUMENT_TYPES.ADJUSTMENT,
-      });
-
-      const res = await postMove({
-        productId: product.id,
-        fromLocationId: loc.scrap,
-        toLocationId: loc.store,
-        quantity: '20',
-        documentType: DOCUMENT_TYPES.ADJUSTMENT,
-        reason: 'Scrap bin miscount corrected',
-      });
+      const res = await request(app)
+        .post('/api/v1/adjustments')
+        .set(auth(manager.token))
+        .send(
+          body({
+            lines: [
+              {
+                productId: product.id,
+                locationId: loc.store.id,
+                countedQuantity: '85.0000',
+              },
+            ],
+          }),
+        );
 
       expect(res.status).toBe(201);
-      expect(await quantOnHand(product.id, loc.store)).toBe('100');
-      expect(await quantOnHand(product.id, loc.scrap)).toBe('0');
+      expect(res.body.data.reference).toMatch(/^ADJ-/);
+      expect(res.body.data.state).toBe(DOC_STATES.DRAFT);
+      expect(res.body.data.lines).toHaveLength(1);
+
+      const line = res.body.data.lines[0];
+      expect(line.systemQuantity.toString()).toBe('80');
+      expect(line.countedQuantity.toString()).toBe('85');
+      expect(line.difference.toString()).toBe('5');
+      trackFixture('adjustments', res.body.data);
     });
 
-    it('accepts production as the stock-holding side of a write-off', async () => {
-      await receive(loc.production, 10);
+    it('creates draft adjustment without immediately mutating stock', async () => {
+      await stock(product.id, loc.store.id, '80.0000', '0.0000');
+      const adj = await createAdjustment(manager.token);
 
-      const res = await postMove({
-        productId: product.id,
-        fromLocationId: loc.production,
-        toLocationId: loc.scrap,
-        quantity: '4',
-        documentType: DOCUMENT_TYPES.ADJUSTMENT,
-      });
-
-      expect(res.status).toBe(201);
-      expect(await quantOnHand(product.id, loc.production)).toBe('6');
-    });
-  });
-
-  describe('rejected shapes', () => {
-    it('rejects a stock-to-stock move labelled as an adjustment', async () => {
-      const res = await postMove({
-        productId: product.id,
-        fromLocationId: loc.store,
-        toLocationId: loc.production,
-        quantity: '10',
-        documentType: DOCUMENT_TYPES.ADJUSTMENT,
-      });
-
-      expect(res.status).toBe(422);
-      expect(res.body.code).toBe('INVALID_LOCATION_TYPES');
-      expect(res.body.message).toMatch(/stock-holding location and SCRAP/);
-      expect(await quantOnHand(product.id, loc.store)).toBe('100');
-      expect(await quantOnHand(product.id, loc.production)).toBe('0');
+      const quant = await quantOf(product.id, loc.store.id);
+      expect(quant.onHand.toString()).toBe('80');
+      expect(adj.state).toBe(DOC_STATES.DRAFT);
     });
 
-    it('rejects an adjustment into a boundary location', async () => {
-      const res = await postMove({
-        productId: product.id,
-        fromLocationId: loc.store,
-        toLocationId: loc.customer,
-        quantity: '10',
-        documentType: DOCUMENT_TYPES.ADJUSTMENT,
-      });
-
-      expect(res.status).toBe(422);
-      expect(res.body.code).toBe('INVALID_LOCATION_TYPES');
-    });
-
-    it('rejects an adjustment out of a boundary location', async () => {
-      const res = await postMove({
-        productId: product.id,
-        fromLocationId: loc.vendor,
-        toLocationId: loc.store,
-        quantity: '10',
-        documentType: DOCUMENT_TYPES.ADJUSTMENT,
-      });
-
-      expect(res.status).toBe(422);
-      expect(res.body.code).toBe('INVALID_LOCATION_TYPES');
-    });
-
-    it('rejects a scrap-to-scrap move labelled as an adjustment', async () => {
-      // SCRAP holds stock, so a move between two scrap bins is stock-holding on
-      // both sides. It is a transfer, and posting it as a correction would
-      // launder a quantity discrepancy into a stock write-off.
-      await receive(loc.scrap, 40);
-
-      const res = await postMove({
-        productId: product.id,
-        fromLocationId: loc.scrap,
-        toLocationId: loc.scrapYard,
-        quantity: '10',
-        documentType: DOCUMENT_TYPES.ADJUSTMENT,
-      });
-
-      expect(res.status).toBe(422);
-      expect(res.body.code).toBe('INVALID_LOCATION_TYPES');
-      expect(res.body.message).toMatch(/ordinary stock-holding location and SCRAP/);
-      expect(await quantOnHand(product.id, loc.scrap)).toBe('40');
-      expect(await quantOnHand(product.id, loc.scrapYard)).toBe('0');
-    });
-
-    it('leaves the ledger untouched when an adjustment is rejected', async () => {
-      const before = await prisma.stockMove.count({ where: { productId: product.id } });
-
-      await postMove({
-        productId: product.id,
-        fromLocationId: loc.store,
-        toLocationId: loc.production,
-        quantity: '10',
-        documentType: DOCUMENT_TYPES.ADJUSTMENT,
-      });
-
-      expect(await prisma.stockMove.count({ where: { productId: product.id } })).toBe(before);
-    });
-  });
-
-  describe('document type inference', () => {
-    it('infers a write-off as an adjustment but treats a write-back as internal', async () => {
-      // holding -> scrap: inferred as an adjustment, and it posts.
-      const writeOff = await postMove({
-        productId: product.id,
-        fromLocationId: loc.store,
-        toLocationId: loc.scrap,
-        quantity: '5',
-      });
-      expect(writeOff.status).toBe(201);
-      expect(writeOff.body.data.documentType).toBe(DOCUMENT_TYPES.ADJUSTMENT);
-
-      // scrap -> holding: both sides hold stock, so it infers as an internal
-      // move. Posting a write-back is a deliberate choice by the caller.
-      const writeBack = await postMove({
-        productId: product.id,
-        fromLocationId: loc.scrap,
-        toLocationId: loc.store,
-        quantity: '5',
-      });
-      expect(writeBack.status).toBe(201);
-      expect(writeBack.body.data.documentType).toBe(DOCUMENT_TYPES.INTERNAL);
-    });
-
-    it('infers a move between two scrap bins as an internal transfer', async () => {
-      await receive(loc.scrap, 40);
-
-      const res = await postMove({
-        productId: product.id,
-        fromLocationId: loc.scrap,
-        toLocationId: loc.scrapYard,
-        quantity: '5',
-      });
-
-      expect(res.status).toBe(201);
-      expect(res.body.data.documentType).toBe(DOCUMENT_TYPES.INTERNAL);
-    });
-
-    it('still refuses a boundary-to-boundary move outright', async () => {
-      const res = await postMove({
-        productId: product.id,
-        fromLocationId: loc.customer,
-        toLocationId: loc.vendor,
-        quantity: '5',
-      });
+    it('rejects count on non-INTERNAL location', async () => {
+      const res = await request(app)
+        .post('/api/v1/adjustments')
+        .set(auth(manager.token))
+        .send(
+          body({
+            lines: [
+              {
+                productId: product.id,
+                locationId: loc.vendor.id,
+                countedQuantity: '10.0000',
+              },
+            ],
+          }),
+        );
 
       expect(res.status).toBe(400);
-      expect(res.body.code).toBe('AMBIGUOUS_DOCUMENT_TYPE');
+      expect(res.body.code).toBe('INVALID_LOCATION_TYPES');
+    });
+
+    it('rejects location from another warehouse', async () => {
+      const res = await request(app)
+        .post('/api/v1/adjustments')
+        .set(auth(manager.token))
+        .send(
+          body({
+            lines: [
+              {
+                productId: product.id,
+                locationId: otherLoc.store.id,
+                countedQuantity: '10.0000',
+              },
+            ],
+          }),
+        );
+
+      expect(res.status).toBe(400);
+      expect(res.body.message).toMatch(/does not belong to warehouse/i);
+    });
+  });
+
+  describe('validation & stock mutations', () => {
+    it('applies positive adjustment (+5): final stock equals 85 and posts write-back from SCRAP', async () => {
+      await stock(product.id, loc.store.id, '80.0000', '0.0000');
+
+      const adj = await createAdjustment(manager.token, {
+        lines: [
+          {
+            productId: product.id,
+            locationId: loc.store.id,
+            countedQuantity: '85.0000',
+          },
+        ],
+      });
+
+      const res = await validate(manager.token, adj.id);
+      expect(res.status).toBe(200);
+      expect(res.body.data.state).toBe(DOC_STATES.DONE);
+
+      const quant = await quantOf(product.id, loc.store.id);
+      expect(quant.onHand.toString()).toBe('85');
+
+      // Verify StockMove: SCRAP -> STORE (+5)
+      const move = await prisma.stockMove.findFirst({
+        where: { documentType: 'ADJUSTMENT', documentId: adj.id },
+      });
+      expect(move).toBeDefined();
+      expect(move.fromLocationId).toBe(loc.scrap.id);
+      expect(move.toLocationId).toBe(loc.store.id);
+      expect(move.quantity.toString()).toBe('5');
+      expect(move.state).toBe(DOC_STATES.DONE);
+
+      // Verify GET /adjustments/:id details status mapping
+      const detailRes = await request(app)
+        .get(`/api/v1/adjustments/${adj.id}`)
+        .set(auth(manager.token));
+      expect(detailRes.status).toBe(200);
+      expect(detailRes.body.data.state).toBe(DOC_STATES.DONE);
+      expect(detailRes.body.data.validatedById).toBe(manager.user.id);
+      expect(detailRes.body.data.validator?.name).toBe(manager.user.name);
+    });
+
+    it('applies negative adjustment (-5): final stock equals 75 and posts write-off to SCRAP', async () => {
+      await stock(product.id, loc.store.id, '80.0000', '0.0000');
+
+      const adj = await createAdjustment(manager.token, {
+        lines: [
+          {
+            productId: product.id,
+            locationId: loc.store.id,
+            countedQuantity: '75.0000',
+          },
+        ],
+      });
+
+      const res = await validate(manager.token, adj.id);
+      expect(res.status).toBe(200);
+
+      const quant = await quantOf(product.id, loc.store.id);
+      expect(quant.onHand.toString()).toBe('75');
+
+      // Verify StockMove: STORE -> SCRAP (5)
+      const move = await prisma.stockMove.findFirst({
+        where: { documentType: 'ADJUSTMENT', documentId: adj.id },
+      });
+      expect(move).toBeDefined();
+      expect(move.fromLocationId).toBe(loc.store.id);
+      expect(move.toLocationId).toBe(loc.scrap.id);
+      expect(move.quantity.toString()).toBe('5');
+      expect(move.state).toBe(DOC_STATES.DONE);
+    });
+
+    it('handles zero difference (80 -> 80): stock unchanged and no fake move posted', async () => {
+      await stock(product.id, loc.store.id, '80.0000', '0.0000');
+
+      const adj = await createAdjustment(manager.token, {
+        lines: [
+          {
+            productId: product.id,
+            locationId: loc.store.id,
+            countedQuantity: '80.0000',
+          },
+        ],
+      });
+
+      const res = await validate(manager.token, adj.id);
+      expect(res.status).toBe(200);
+      expect(res.body.data.state).toBe(DOC_STATES.DONE);
+
+      const quant = await quantOf(product.id, loc.store.id);
+      expect(quant.onHand.toString()).toBe('80');
+
+      const move = await prisma.stockMove.findFirst({
+        where: { documentType: 'ADJUSTMENT', documentId: adj.id },
+      });
+      expect(move).toBeNull();
+    });
+
+    it('rejects stale adjustment if stock changed between count creation and validation', async () => {
+      await stock(product.id, loc.store.id, '80.0000', '0.0000');
+
+      const adj = await createAdjustment(manager.token, {
+        lines: [
+          {
+            productId: product.id,
+            locationId: loc.store.id,
+            countedQuantity: '85.0000',
+          },
+        ],
+      });
+
+      // Simulating concurrent stock change
+      await stock(product.id, loc.store.id, '82.0000', '0.0000');
+
+      const res = await validate(manager.token, adj.id);
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('STALE_ADJUSTMENT');
+
+      const quant = await quantOf(product.id, loc.store.id);
+      expect(quant.onHand.toString()).toBe('82');
+    });
+
+    it('rejects count when countedQuantity < active reservedQuantity', async () => {
+      // 100 onHand, 30 reserved
+      await stock(product.id, loc.store.id, '100.0000', '30.0000');
+
+      // Attempting to adjust down to 20 (less than 30 reserved)
+      const adj = await createAdjustment(manager.token, {
+        lines: [
+          {
+            productId: product.id,
+            locationId: loc.store.id,
+            countedQuantity: '20.0000',
+          },
+        ],
+      });
+
+      const res = await validate(manager.token, adj.id);
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe('ADJUSTMENT_BELOW_RESERVED');
+    });
+  });
+
+  describe('RBAC & approval separation', () => {
+    it('allows staff to create adjustment counts', async () => {
+      await stock(product.id, loc.store.id, '50.0000', '0.0000');
+      const adj = await createAdjustment(staff.token, {
+        lines: [
+          {
+            productId: product.id,
+            locationId: loc.store.id,
+            countedQuantity: '52.0000',
+          },
+        ],
+      });
+      expect(adj.state).toBe(DOC_STATES.DRAFT);
+    });
+
+    it('denies staff from validating / approving adjustments', async () => {
+      await stock(product.id, loc.store.id, '50.0000', '0.0000');
+      const adj = await createAdjustment(staff.token, {
+        lines: [
+          {
+            productId: product.id,
+            locationId: loc.store.id,
+            countedQuantity: '52.0000',
+          },
+        ],
+      });
+
+      const res = await validate(staff.token, adj.id);
+      expect(res.status).toBe(403);
+    });
+
+    it('allows inventory manager to approve/validate adjustments', async () => {
+      await stock(product.id, loc.store.id, '50.0000', '0.0000');
+      const adj = await createAdjustment(staff.token, {
+        lines: [
+          {
+            productId: product.id,
+            locationId: loc.store.id,
+            countedQuantity: '52.0000',
+          },
+        ],
+      });
+
+      const res = await validate(manager.token, adj.id);
+      expect(res.status).toBe(200);
+      expect(res.body.data.state).toBe(DOC_STATES.DONE);
+      expect(res.body.data.validatedById).toBe(manager.user.id);
+    });
+  });
+
+  describe('multi-line atomicity & idempotency', () => {
+    it('replays validation with Idempotent-Replay header without applying difference twice', async () => {
+      await stock(product.id, loc.store.id, '60.0000', '0.0000');
+
+      const adj = await createAdjustment(manager.token, {
+        lines: [
+          {
+            productId: product.id,
+            locationId: loc.store.id,
+            countedQuantity: '65.0000',
+          },
+        ],
+      });
+
+      const key = unique('key');
+      const first = await validate(manager.token, adj.id, key);
+      const second = await validate(manager.token, adj.id, key);
+
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      expect(second.headers['idempotent-replay']).toBe('true');
+      expect((await quantOf(product.id, loc.store.id)).onHand.toString()).toBe('65');
+    });
+
+    it('rejects double validation with a new key', async () => {
+      await stock(product.id, loc.store.id, '60.0000', '0.0000');
+
+      const adj = await createAdjustment(manager.token, {
+        lines: [
+          {
+            productId: product.id,
+            locationId: loc.store.id,
+            countedQuantity: '65.0000',
+          },
+        ],
+      });
+
+      expect((await validate(manager.token, adj.id)).status).toBe(200);
+      const second = await validate(manager.token, adj.id);
+
+      expect(second.status).toBe(409);
+      expect(second.body.code).toBe('DOCUMENT_ALREADY_VALIDATED');
+    });
+
+    it('cancels adjustment without stock mutation', async () => {
+      await stock(product.id, loc.store.id, '60.0000', '0.0000');
+      const adj = await createAdjustment(manager.token);
+
+      const res = await request(app)
+        .post(`/api/v1/adjustments/${adj.id}/cancel`)
+        .set(auth(manager.token));
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.state).toBe(DOC_STATES.CANCELLED);
+
+      expect((await quantOf(product.id, loc.store.id)).onHand.toString()).toBe('60');
+    });
+
+    it('rolls back multi-line adjustment atomically if one line fails', async () => {
+      await stock(product.id, loc.store.id, '50.0000', '0.0000');
+      await stock(product2.id, loc.store.id, '30.0000', '25.0000'); // 25 reserved
+
+      const adj = await createAdjustment(manager.token, {
+        lines: [
+          {
+            productId: product.id,
+            locationId: loc.store.id,
+            countedQuantity: '55.0000', // valid +5
+          },
+          {
+            productId: product2.id,
+            locationId: loc.store.id,
+            countedQuantity: '20.0000', // invalid: < 25 reserved
+          },
+        ],
+      });
+
+      const res = await validate(manager.token, adj.id);
+      expect(res.status).toBe(422);
+
+      // Line 1 must be rolled back
+      expect((await quantOf(product.id, loc.store.id)).onHand.toString()).toBe('50');
+      expect((await quantOf(product2.id, loc.store.id)).onHand.toString()).toBe('30');
+
+      const count = await prisma.stockMove.count({
+        where: { documentType: 'ADJUSTMENT', documentId: adj.id },
+      });
+      expect(count).toBe(0);
     });
   });
 });
