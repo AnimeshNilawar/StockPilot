@@ -41,6 +41,30 @@ StockPilot/
 
 Copy `.env.example` to `.env` in the root folder before starting up (or just use docker compose which handles defaults).
 
+## Password Reset Email Configuration
+
+StockPilot supports two modes for delivering password reset OTPs.
+
+### Offline / Local Mode (Default)
+`OTP_DELIVERY_MODE=console`
+When working completely offline, the application will intercept the 6-digit OTP and print it directly into the backend development terminal. No external network is required.
+
+### Gmail SMTP Mode (Optional)
+`OTP_DELIVERY_MODE=smtp`
+The backend can optionally send OTPs through Gmail SMTP. To use this, you must configure a Google App Password (do NOT use your standard Gmail password).
+
+Required variables in `.env`:
+```env
+OTP_DELIVERY_MODE=smtp
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=your-email@gmail.com
+SMTP_PASSWORD=your-google-app-password
+SMTP_FROM=your-email@gmail.com
+```
+*Note: Gmail SMTP is strictly an optional development transport. The StockPilot application remains locally hosted.*
+
 ## Docker Setup
 
 The primary way to run the application locally is via Docker Compose.

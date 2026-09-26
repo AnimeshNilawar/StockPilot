@@ -6,6 +6,14 @@ const envSchema = z.object({
   PORT: z.string().transform(Number).default('3000'),
   DATABASE_URL: z.string().url().optional(),
   FRONTEND_URL: z.string().url().default('http://localhost:5173'),
+  
+  OTP_DELIVERY_MODE: z.enum(['console', 'smtp']).default('console'),
+  SMTP_HOST: z.string().default('smtp.gmail.com'),
+  SMTP_PORT: z.string().transform(Number).default('587'),
+  SMTP_SECURE: z.string().transform(val => val === 'true').default('false'),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASSWORD: z.string().optional(),
+  SMTP_FROM: z.string().optional(),
 });
 
 const _env = envSchema.safeParse(process.env);

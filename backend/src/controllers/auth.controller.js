@@ -294,9 +294,10 @@ class AuthController {
       if (user && user.status === 'ACTIVE') {
         const otp = authService.generateOtp();
         const otpHash = authService.hashToken(otp);
-        const expiresAt = new Date(Date.now() + authConfig.otp.expirationMinutes * 60000);
+        const expiresInMinutes = authConfig.otp.expirationMinutes;
+        const expiresAt = new Date(Date.now() + expiresInMinutes * 60000);
 
-        await prisma.otpReset.create({
+        const otpRecord = await prisma.otpReset.create({
           data: {
             userId: user.id,
             otpHash,
@@ -304,9 +305,18 @@ class AuthController {
           },
         });
 
-        // In development, log the OTP for testing purposes
-        if (process.env.NODE_ENV !== 'production') {
-          console.log(`[DEV ONLY] OTP for ${email}: ${otp}`);
+        try {
+          const emailService = require('../services/email/email.service');
+          await emailService.sendPasswordResetOtp({
+            to: email,
+            otp,
+            expiresInMinutes
+          });
+        } catch (deliveryError) {
+          // If delivery fails, safely invalidate/delete the OTP reset record so the user can try again
+          // and we don't leave an orphaned valid hash
+          await prisma.otpReset.delete({ where: { id: otpRecord.id } });
+          throw deliveryError; // This will be caught by the outer catch and return generic error
         }
       }
 
@@ -320,6 +330,13 @@ class AuthController {
           .status(400)
           .json({ success: false, message: 'Validation failed', code: 'VALIDATION_ERROR' });
       }
+      
+      // Do not leak SMTP or internal errors to client in production
+      // Actually we just return generic error for anything else here as per req
+      if (error.message === 'Email delivery failed') {
+         return res.status(500).json({ success: false, message: 'Unable to process request at this time', code: 'SERVER_ERROR' });
+      }
+
       next(error);
     }
   }
